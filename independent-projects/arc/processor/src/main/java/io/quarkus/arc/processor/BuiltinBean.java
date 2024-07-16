@@ -31,6 +31,7 @@ import io.quarkus.arc.impl.ListProvider;
 import io.quarkus.arc.impl.ResourceProvider;
 import io.quarkus.arc.processor.InjectionPointInfo.InjectionPointKind;
 import io.quarkus.arc.processor.InjectionTargetInfo.TargetKind;
+import io.quarkus.gizmo.BytecodeCreator;
 import io.quarkus.gizmo.ClassCreator;
 import io.quarkus.gizmo.ClassOutput;
 import io.quarkus.gizmo.FieldDescriptor;
@@ -50,13 +51,12 @@ public enum BuiltinBean {
             BuiltinBean::validateInjectionPoint, DotNames.INJECTION_POINT),
     BEAN(BuiltinBean::generateBeanBytecode,
             (ip, names) -> cdiAndRawTypeMatches(ip, DotNames.BEAN, DotNames.INJECTABLE_BEAN) && ip.hasDefaultedQualifier(),
-            DotNames.BEAN),
-
+            BuiltinBean::validateBean, DotNames.BEAN),
     INTERCEPTED_BEAN(BuiltinBean::generateInterceptedBeanBytecode,
             (ip, names) -> cdiAndRawTypeMatches(ip, DotNames.BEAN, DotNames.INJECTABLE_BEAN) && !ip.hasDefaultedQualifier()
                     && ip.getRequiredQualifiers().size() == 1
                     && ip.getRequiredQualifiers().iterator().next().name().equals(DotNames.INTERCEPTED),
-            DotNames.BEAN),
+            BuiltinBean::validateInterceptedBean, DotNames.BEAN),
     BEAN_MANAGER(BuiltinBean::generateBeanManagerBytecode, DotNames.BEAN_MANAGER, DotNames.BEAN_CONTAINER),
     EVENT(BuiltinBean::generateEventBytecode, DotNames.EVENT),
     RESOURCE(BuiltinBean::generateResourceBytecode, (ip, names) -> ip.getKind() == InjectionPointKind.RESOURCE,
@@ -66,6 +66,9 @@ public enum BuiltinBean {
     LIST(BuiltinBean::generateListBytecode,
             (ip, names) -> cdiAndRawTypeMatches(ip, DotNames.LIST) && ip.getRequiredQualifier(DotNames.ALL) != null,
             BuiltinBean::validateList, DotNames.LIST),
+    INTERCEPTION_PROXY(BuiltinBean::generateInterceptionProxyBytecode,
+            BuiltinBean::cdiAndRawTypeMatches, BuiltinBean::validateInterceptionProxy,
+            DotNames.INTERCEPTION_PROXY),
             ;
 
     private final DotName[] rawTypeDotNames;
@@ -209,6 +212,9 @@ public enum BuiltinBean {
             case BEAN:
                 beanHandle = ctx.constructor.getThis();
                 break;
+            case INVOKER:
+                beanHandle = loadInvokerTargetBean(ctx.targetInfo.asInvoker(), ctx.constructor);
+                break;
             default:
                 throw new IllegalStateException("Unsupported target info: " + ctx.targetInfo);
         }
@@ -261,6 +267,9 @@ public enum BuiltinBean {
             case BEAN:
                 bean = ctx.constructor.getThis();
                 break;
+            case INVOKER:
+                bean = loadInvokerTargetBean(ctx.targetInfo.asInvoker(), ctx.constructor);
+                break;
             default:
                 throw new IllegalStateException("Unsupported target info: " + ctx.targetInfo);
         }
@@ -297,9 +306,6 @@ public enum BuiltinBean {
 
     private static void generateBeanBytecode(GeneratorContext ctx) {
         // this.beanProvider1 = () -> new BeanMetadataProvider<>();
-        if (ctx.targetInfo.kind() != InjectionTargetInfo.TargetKind.BEAN) {
-            throw new IllegalStateException("Invalid injection target info: " + ctx.targetInfo);
-        }
         ResultHandle beanProvider = ctx.constructor.newInstance(
                 MethodDescriptor.ofConstructor(BeanMetadataProvider.class, String.class),
                 ctx.constructor.load(ctx.targetInfo.asBean().getIdentifier()));
@@ -313,9 +319,6 @@ public enum BuiltinBean {
     }
 
     private static void generateInterceptedBeanBytecode(GeneratorContext ctx) {
-        if (!(ctx.targetInfo instanceof InterceptorInfo)) {
-            throw new IllegalStateException("Invalid injection target info: " + ctx.targetInfo);
-        }
         ResultHandle interceptedBeanMetadataProvider = ctx.constructor
                 .newInstance(MethodDescriptor.ofConstructor(InterceptedBeanMetadataProvider.class));
 
@@ -371,9 +374,9 @@ public enum BuiltinBean {
         // Register injection point for reflection
         InjectionPointInfo injectionPoint = ctx.injectionPoint;
         if (injectionPoint.isField()) {
-            ctx.reflectionRegistration.registerField(injectionPoint.getTarget().asField());
+            ctx.reflectionRegistration.registerField(injectionPoint.getAnnotationTarget().asField());
         } else {
-            ctx.reflectionRegistration.registerMethod(injectionPoint.getTarget().asMethod());
+            ctx.reflectionRegistration.registerMethod(injectionPoint.getAnnotationTarget().asMethodParameter().method());
         }
 
         MethodCreator mc = ctx.constructor;
@@ -409,6 +412,9 @@ public enum BuiltinBean {
             case BEAN:
                 beanHandle = ctx.constructor.getThis();
                 break;
+            case INVOKER:
+                beanHandle = loadInvokerTargetBean(ctx.targetInfo.asInvoker(), ctx.constructor);
+                break;
             default:
                 throw new IllegalStateException("Unsupported target info: " + ctx.targetInfo);
         }
@@ -425,6 +431,22 @@ public enum BuiltinBean {
                 FieldDescriptor.of(ctx.clazzCreator.getClassName(), ctx.providerName,
                         Supplier.class.getName()),
                 ctx.constructor.getThis(), listProviderSupplier);
+    }
+
+    private static void generateInterceptionProxyBytecode(GeneratorContext ctx) {
+        BeanInfo bean = ctx.targetInfo.asBean();
+        String name = InterceptionProxyGenerator.interceptionProxyProviderName(bean);
+
+        ResultHandle supplier = ctx.constructor.newInstance(MethodDescriptor.ofConstructor(name));
+        ctx.constructor.writeInstanceField(
+                FieldDescriptor.of(ctx.clazzCreator.getClassName(), ctx.providerName, Supplier.class.getName()),
+                ctx.constructor.getThis(), supplier);
+    }
+
+    private static ResultHandle loadInvokerTargetBean(InvokerInfo invoker, BytecodeCreator bytecode) {
+        ResultHandle arc = bytecode.invokeStaticMethod(MethodDescriptors.ARC_CONTAINER);
+        return bytecode.invokeInterfaceMethod(MethodDescriptors.ARC_CONTAINER_BEAN, arc,
+                bytecode.load(invoker.targetBean.getIdentifier()));
     }
 
     private static void validateInstance(InjectionTargetInfo injectionTarget, InjectionPointInfo injectionPoint,
@@ -455,9 +477,9 @@ public enum BuiltinBean {
             if (typeParam.kind() == Type.Kind.WILDCARD_TYPE) {
                 ClassInfo declaringClass;
                 if (injectionPoint.isField()) {
-                    declaringClass = injectionPoint.getTarget().asField().declaringClass();
+                    declaringClass = injectionPoint.getAnnotationTarget().asField().declaringClass();
                 } else {
-                    declaringClass = injectionPoint.getTarget().asMethod().declaringClass();
+                    declaringClass = injectionPoint.getAnnotationTarget().asMethodParameter().method().declaringClass();
                 }
                 if (isKotlinClass(declaringClass)) {
                     errors.accept(
@@ -488,11 +510,49 @@ public enum BuiltinBean {
         }
     }
 
+    private static void validateBean(InjectionTargetInfo injectionTarget, InjectionPointInfo injectionPoint,
+            Consumer<Throwable> errors) {
+        if (injectionTarget.kind() != InjectionTargetInfo.TargetKind.BEAN) {
+            errors.accept(new DefinitionException("Only beans can access bean metadata"));
+        }
+    }
+
+    private static void validateInterceptedBean(InjectionTargetInfo injectionTarget, InjectionPointInfo injectionPoint,
+            Consumer<Throwable> errors) {
+        if (injectionTarget.kind() != InjectionTargetInfo.TargetKind.BEAN || !injectionTarget.asBean().isInterceptor()) {
+            errors.accept(new DefinitionException("Only interceptors can access intercepted bean metadata"));
+        }
+    }
+
     private static void validateEventMetadata(InjectionTargetInfo injectionTarget, InjectionPointInfo injectionPoint,
             Consumer<Throwable> errors) {
         if (injectionTarget.kind() != TargetKind.OBSERVER) {
             errors.accept(new DefinitionException("EventMetadata can be only injected into an observer method: "
                     + injectionPoint.getTargetInfo()));
+        }
+    }
+
+    private static void validateInterceptionProxy(InjectionTargetInfo injectionTarget,
+            InjectionPointInfo injectionPoint, Consumer<Throwable> errors) {
+        if (injectionTarget.kind() != TargetKind.BEAN
+                || (!injectionTarget.asBean().isProducerMethod() && !injectionTarget.asBean().isSynthetic())
+                || injectionTarget.asBean().getInterceptionProxy() == null) {
+            errors.accept(new DefinitionException(
+                    "InterceptionProxy can only be injected into a producer method or a synthetic bean"));
+        }
+        if (injectionPoint.getType().kind() != Kind.PARAMETERIZED_TYPE) {
+            errors.accept(new DefinitionException("InterceptionProxy must be a parameterized type"));
+        }
+        Type interceptionProxyType = injectionPoint.getType().asParameterizedType().arguments().get(0);
+        if (interceptionProxyType.kind() != Kind.CLASS && interceptionProxyType.kind() != Kind.PARAMETERIZED_TYPE) {
+            errors.accept(new DefinitionException(
+                    "Type argument of InterceptionProxy may only be a class or parameterized type"));
+        }
+        if (!injectionTarget.asBean().getProviderType().equals(interceptionProxyType)) {
+            String msg = injectionTarget.asBean().isProducerMethod()
+                    ? "Type argument of InterceptionProxy must be equal to the return type of the producer method"
+                    : "Type argument of InterceptionProxy must be equal to the bean provider type";
+            errors.accept(new DefinitionException(msg));
         }
     }
 

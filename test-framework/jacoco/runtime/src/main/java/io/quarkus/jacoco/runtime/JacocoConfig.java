@@ -17,6 +17,12 @@ public class JacocoConfig {
     public static final String TARGET_JACOCO_REPORT = "target/" + JACOCO_REPORT;
 
     /**
+     * Whether or not the jacoco extension is enabled.
+     */
+    @ConfigItem(defaultValue = "true")
+    public boolean enabled;
+
+    /**
      * The jacoco data file.
      * The path can be relative (to the module) or absolute.
      */
@@ -46,7 +52,7 @@ public class JacocoConfig {
     /**
      * Name of the root node HTML report pages.
      */
-    @ConfigItem
+    @ConfigItem(defaultValue = "${quarkus.application.name}")
     public Optional<String> title;
 
     /**

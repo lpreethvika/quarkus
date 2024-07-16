@@ -193,7 +193,7 @@ public class MqttDevServicesProcessor {
         Map<String, String> configMap = new HashMap<>();
         configMap.put("mp.messaging.connector.smallrye-mqtt.host", host);
         configMap.put("mp.messaging.connector.smallrye-mqtt.port", String.valueOf(port));
-        return new RunningDevService(Feature.SMALLRYE_REACTIVE_MESSAGING_MQTT.getName(),
+        return new RunningDevService(Feature.MESSAGING_MQTT.getName(),
                 containerId, closeable, configMap);
     }
 
@@ -207,8 +207,8 @@ public class MqttDevServicesProcessor {
             if ((isIncoming || isOutgoing) && isConnector) {
                 String connectorValue = config.getValue(name, String.class);
                 boolean isMqtt = connectorValue.equalsIgnoreCase("smallrye-mqtt");
-                boolean hasHost = ConfigUtils.isPropertyPresent(name.replace(".connector", ".host"));
-                boolean hasPort = ConfigUtils.isPropertyPresent(name.replace(".connector", ".port"));
+                boolean hasHost = ConfigUtils.isPropertyNonEmpty(name.replace(".connector", ".host"));
+                boolean hasPort = ConfigUtils.isPropertyNonEmpty(name.replace(".connector", ".port"));
                 isConfigured = isMqtt && (hasHost || hasPort);
                 if (!isConfigured) {
                     return true;

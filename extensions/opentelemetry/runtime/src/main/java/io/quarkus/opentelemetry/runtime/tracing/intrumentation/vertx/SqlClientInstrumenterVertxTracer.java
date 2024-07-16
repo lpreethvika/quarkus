@@ -6,10 +6,10 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.instrumentation.api.incubator.semconv.db.DbClientSpanNameExtractor;
+import io.opentelemetry.instrumentation.api.incubator.semconv.db.SqlClientAttributesExtractor;
 import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
-import io.opentelemetry.instrumentation.api.instrumenter.db.DbClientSpanNameExtractor;
-import io.opentelemetry.instrumentation.api.instrumenter.db.SqlClientAttributesExtractor;
 import io.vertx.core.Context;
 import io.vertx.core.spi.tracing.SpanKind;
 import io.vertx.core.spi.tracing.TagExtractor;
@@ -38,7 +38,7 @@ public class SqlClientInstrumenterVertxTracer implements
             return true;
         }
 
-        return tagExtractor.extract(request).containsKey("db.statement");
+        return "sql".equals(tagExtractor.extract(request).get("db.type"));
     }
 
     @Override
@@ -87,7 +87,7 @@ public class SqlClientInstrumenterVertxTracer implements
         return sqlClientInstrumenter;
     }
 
-    // From io.vertx.sqlclient.impl.tracing.QueryTracer
+    // From io.vertx.sqlclient.impl.tracing.QueryReporter
     static class QueryTrace {
         private final Map<String, String> attributes;
 
@@ -117,7 +117,7 @@ public class SqlClientInstrumenterVertxTracer implements
     }
 
     static class SqlClientAttributesGetter implements
-            io.opentelemetry.instrumentation.api.instrumenter.db.SqlClientAttributesGetter<QueryTrace> {
+            io.opentelemetry.instrumentation.api.incubator.semconv.db.SqlClientAttributesGetter<QueryTrace> {
 
         @Override
         public String getRawStatement(final QueryTrace queryTrace) {

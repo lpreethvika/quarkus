@@ -3,6 +3,7 @@ package io.quarkus.smallrye.reactivemessaging.amqp.deployment;
 import java.util.Map;
 import java.util.Optional;
 
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.runtime.annotations.ConfigItem;
 
@@ -35,7 +36,7 @@ public class AmqpDevServicesBuildTimeConfig {
      * page</a>
      * to find the available versions.
      */
-    @ConfigItem(defaultValue = "quay.io/artemiscloud/activemq-artemis-broker:1.0.22")
+    @ConfigItem(defaultValue = "quay.io/artemiscloud/activemq-artemis-broker:1.0.25")
     public String imageName;
 
     /**
@@ -77,6 +78,7 @@ public class AmqpDevServicesBuildTimeConfig {
      * Environment variables that are passed to the container.
      */
     @ConfigItem
+    @ConfigDocMapKey("environment-variable-name")
     public Map<String, String> containerEnv;
 
 }

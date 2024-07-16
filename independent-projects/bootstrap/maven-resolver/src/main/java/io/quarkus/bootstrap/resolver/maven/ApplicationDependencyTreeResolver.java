@@ -202,7 +202,6 @@ public class ApplicationDependencyTreeResolver {
             }
         }
 
-        // resolve and inject deployment dependency branches for the top (first met) runtime extension nodes
         for (ExtensionDependency extDep : topExtensionDeps) {
             injectDeploymentDependencies(extDep);
         }
@@ -281,15 +280,19 @@ public class ApplicationDependencyTreeResolver {
         int flags = DependencyFlags.DIRECT | DependencyFlags.COMPILE_ONLY;
         while (children != null) {
             for (DependencyNode node : children) {
-                if (appBuilder.getDependency(getKey(node.getArtifact())) == null) {
-                    var dep = newDependencyBuilder(node, resolver).setFlags(flags);
-                    if (getExtensionInfoOrNull(node.getArtifact(), node.getRepositories()) != null) {
+                var extInfo = getExtensionInfoOrNull(node.getArtifact(), node.getRepositories());
+                var dep = appBuilder.getDependency(getKey(node.getArtifact()));
+                if (dep == null) {
+                    dep = newDependencyBuilder(node, resolver).setFlags(flags);
+                    if (extInfo != null) {
                         dep.setFlags(DependencyFlags.RUNTIME_EXTENSION_ARTIFACT);
                         if (dep.isFlagSet(DependencyFlags.DIRECT)) {
                             dep.setFlags(DependencyFlags.TOP_LEVEL_RUNTIME_EXTENSION_ARTIFACT);
                         }
                     }
                     appBuilder.addDependency(dep);
+                } else {
+                    dep.setFlags(DependencyFlags.COMPILE_ONLY);
                 }
                 if (!node.getChildren().isEmpty()) {
                     depStack.add(node.getChildren());
@@ -423,6 +426,10 @@ public class ApplicationDependencyTreeResolver {
             final ExtensionDependency extDep = getExtensionDependencyOrNull(node, artifact);
 
             if (dep == null) {
+                // in case it was relocated it might not survive conflict resolution in the deployment graph
+                if (!node.getRelocations().isEmpty()) {
+                    ((DefaultDependencyNode) node).setRelocations(List.of());
+                }
                 WorkspaceModule module = null;
                 if (resolver.getProjectModuleResolver() != null) {
                     module = resolver.getProjectModuleResolver().getProjectModule(artifact.getGroupId(),
@@ -864,7 +871,7 @@ public class ApplicationDependencyTreeResolver {
         ExtensionDependency getExtensionDependency() {
             if (dependency == null) {
                 final DefaultDependencyNode rtNode = new DefaultDependencyNode(
-                        new Dependency(info.runtimeArtifact, JavaScopes.RUNTIME));
+                        new Dependency(info.runtimeArtifact, JavaScopes.COMPILE));
                 rtNode.setVersion(new BootstrapArtifactVersion(info.runtimeArtifact.getVersion()));
                 rtNode.setVersionConstraint(new BootstrapArtifactVersionConstraint(
                         new BootstrapArtifactVersion(info.runtimeArtifact.getVersion())));

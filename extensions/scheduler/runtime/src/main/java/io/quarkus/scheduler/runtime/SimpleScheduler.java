@@ -16,7 +16,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import jakarta.annotation.PreDestroy;
@@ -129,14 +131,32 @@ public class SimpleScheduler implements Scheduler {
         }
 
         StartMode startMode = schedulerRuntimeConfig.startMode.orElse(StartMode.NORMAL);
-        if (startMode == StartMode.NORMAL && context.getScheduledMethods().isEmpty()) {
+        if (startMode == StartMode.NORMAL && context.getScheduledMethods().isEmpty() && !context.forceSchedulerStart()) {
             this.scheduledExecutor = null;
             LOG.info("No scheduled business methods found - Simple scheduler will not be started");
             return;
         }
 
+        ThreadFactory tf = new ThreadFactory() {
+
+            private final AtomicInteger threadNumber = new AtomicInteger(1);
+
+            @Override
+            public Thread newThread(Runnable runnable) {
+                Thread t = new Thread(Thread.currentThread().getThreadGroup(), runnable,
+                        "quarkus-scheduler-trigger-check-" + threadNumber.getAndIncrement(),
+                        0);
+                if (t.isDaemon()) {
+                    t.setDaemon(false);
+                }
+                if (t.getPriority() != Thread.NORM_PRIORITY) {
+                    t.setPriority(Thread.NORM_PRIORITY);
+                }
+                return t;
+            }
+        };
         // This executor is used to check all registered triggers every second
-        this.scheduledExecutor = new JBossScheduledThreadPoolExecutor(1, new Runnable() {
+        this.scheduledExecutor = new JBossScheduledThreadPoolExecutor(1, tf, new Runnable() {
             @Override
             public void run() {
                 // noop
@@ -569,28 +589,29 @@ public class SimpleScheduler implements Scheduler {
             super(id, start, description);
             this.cron = cron;
             this.executionTime = ExecutionTime.forCron(cron);
-            this.lastFireTime = start;
             this.gracePeriod = gracePeriod;
             this.timeZone = timeZone;
+            // The last fire time stores the zoned time
+            this.lastFireTime = zoned(start);
         }
 
         @Override
         public Instant getNextFireTime() {
-            Optional<ZonedDateTime> nextFireTime = executionTime.nextExecution(lastFireTime);
-            return nextFireTime.isPresent() ? nextFireTime.get().toInstant() : null;
+            return executionTime.nextExecution(lastFireTime).map(ZonedDateTime::toInstant).orElse(null);
         }
 
+        @Override
         ZonedDateTime evaluate(ZonedDateTime now) {
             if (now.isBefore(start)) {
                 return null;
             }
-            ZonedDateTime zonedNow = timeZone == null ? now : now.withZoneSameInstant(timeZone);
-            Optional<ZonedDateTime> lastExecution = executionTime.lastExecution(zonedNow);
+            now = zoned(now);
+            Optional<ZonedDateTime> lastExecution = executionTime.lastExecution(now);
             if (lastExecution.isPresent()) {
                 ZonedDateTime lastTruncated = lastExecution.get().truncatedTo(ChronoUnit.SECONDS);
-                if (zonedNow.isAfter(lastTruncated) && lastFireTime.isBefore(lastTruncated)) {
-                    LOG.tracef("%s fired, last=", this, lastTruncated);
-                    lastFireTime = zonedNow;
+                if (now.isAfter(lastTruncated) && lastFireTime.isBefore(lastTruncated)) {
+                    LOG.tracef("%s fired, last=%s", this, lastTruncated);
+                    lastFireTime = now;
                     return lastTruncated;
                 }
             }
@@ -603,15 +624,19 @@ public class SimpleScheduler implements Scheduler {
             if (now.isBefore(start)) {
                 return false;
             }
-            ZonedDateTime zonedNow = timeZone == null ? now : now.withZoneSameInstant(timeZone);
+            now = zoned(now);
             Optional<ZonedDateTime> nextFireTime = executionTime.nextExecution(lastFireTime);
-            return nextFireTime.isEmpty() || nextFireTime.get().plus(gracePeriod).isBefore(zonedNow);
+            return nextFireTime.isEmpty() || nextFireTime.get().plus(gracePeriod).isBefore(now);
         }
 
         @Override
         public String toString() {
             return "CronTrigger [id=" + id + ", cron=" + cron.asString() + ", gracePeriod=" + gracePeriod + ", timeZone="
                     + timeZone + "]";
+        }
+
+        private ZonedDateTime zoned(ZonedDateTime time) {
+            return timeZone == null ? time : time.withZoneSameInstant(timeZone);
         }
 
     }

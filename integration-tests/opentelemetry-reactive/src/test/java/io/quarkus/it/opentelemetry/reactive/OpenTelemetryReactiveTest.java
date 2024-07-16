@@ -3,10 +3,12 @@ package io.quarkus.it.opentelemetry.reactive;
 import static io.opentelemetry.api.trace.SpanKind.CLIENT;
 import static io.opentelemetry.api.trace.SpanKind.INTERNAL;
 import static io.opentelemetry.api.trace.SpanKind.SERVER;
-import static io.opentelemetry.semconv.SemanticAttributes.HTTP_TARGET;
-import static io.opentelemetry.semconv.SemanticAttributes.HTTP_URL;
+import static io.opentelemetry.semconv.UrlAttributes.URL_FULL;
+import static io.opentelemetry.semconv.UrlAttributes.URL_PATH;
+import static io.opentelemetry.semconv.UrlAttributes.URL_QUERY;
 import static io.quarkus.it.opentelemetry.reactive.Utils.getExceptionEventData;
 import static io.quarkus.it.opentelemetry.reactive.Utils.getSpanByKindAndParentId;
+import static io.quarkus.it.opentelemetry.reactive.Utils.getSpanEventAttrs;
 import static io.quarkus.it.opentelemetry.reactive.Utils.getSpans;
 import static io.quarkus.it.opentelemetry.reactive.Utils.getSpansByKindAndParentId;
 import static io.restassured.RestAssured.given;
@@ -25,9 +27,12 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.quarkus.opentelemetry.runtime.tracing.security.SecurityEventUtil;
+import io.quarkus.security.AuthenticationFailedException;
 import io.quarkus.test.junit.QuarkusTest;
 
 @QuarkusTest
@@ -54,6 +59,44 @@ public class OpenTelemetryReactiveTest {
         List<Map<String, Object>> spans = getSpans();
         assertEquals(2, spans.size());
         assertEquals(spans.get(0).get("traceId"), spans.get(1).get("traceId"));
+    }
+
+    @Test
+    void helloGetUniDelayTest() {
+        given()
+                .when()
+                .get("/reactive/hello-get-uni-delay")
+                .then()
+                .statusCode(200)
+                .body(equalTo("helloGetUniDelay"));
+
+        await().atMost(5, SECONDS).until(() -> getSpans().size() == 2);
+        Map<String, Object> parent = getSpanByKindAndParentId(getSpans(), SERVER, "0000000000000000");
+        assertEquals("GET /reactive/hello-get-uni-delay", parent.get("name"));
+
+        Map<String, Object> child = getSpanByKindAndParentId(getSpans(), INTERNAL, parent.get("spanId"));
+        assertEquals("helloGetUniDelay", child.get("name"));
+
+        assertEquals(child.get("traceId"), parent.get("traceId"));
+    }
+
+    @Test
+    void helloGetUniExecutorTest() {
+        given()
+                .when()
+                .get("/reactive/hello-get-uni-executor")
+                .then()
+                .statusCode(200)
+                .body(equalTo("helloGetUniExecutor"));
+
+        await().atMost(5, SECONDS).until(() -> getSpans().size() == 2);
+        Map<String, Object> parent = getSpanByKindAndParentId(getSpans(), SERVER, "0000000000000000");
+        assertEquals("GET /reactive/hello-get-uni-executor", parent.get("name"));
+
+        Map<String, Object> child = getSpanByKindAndParentId(getSpans(), INTERNAL, parent.get("spanId"));
+        assertEquals("helloGetUniExecutor", child.get("name"));
+
+        assertEquals(child.get("traceId"), parent.get("traceId"));
     }
 
     @Test
@@ -127,25 +170,27 @@ public class OpenTelemetryReactiveTest {
 
         // Naruto Span
         Optional<Map<String, Object>> narutoSpan = clientSpans.stream()
-                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(HTTP_URL.getKey())).contains("Naruto"))
+                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(URL_FULL.getKey())).contains("Naruto"))
                 .findFirst();
         assertTrue(narutoSpan.isPresent());
         Map<String, Object> naruto = narutoSpan.get();
 
         Map<String, Object> narutoServer = getSpanByKindAndParentId(spans, SERVER, naruto.get("spanId"));
-        assertEquals("/reactive?name=Naruto", ((Map<?, ?>) narutoServer.get("attributes")).get(HTTP_TARGET.getKey()));
+        assertEquals("/reactive", ((Map<?, ?>) narutoServer.get("attributes")).get(URL_PATH.getKey()));
+        assertEquals("name=Naruto", ((Map<?, ?>) narutoServer.get("attributes")).get(URL_QUERY.getKey()));
         Map<String, Object> narutoInternal = getSpanByKindAndParentId(spans, INTERNAL, narutoServer.get("spanId"));
         assertEquals("helloGet", narutoInternal.get("name"));
 
         // Goku Span
         Optional<Map<String, Object>> gokuSpan = clientSpans.stream()
-                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(HTTP_URL.getKey())).contains("Goku"))
+                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(URL_FULL.getKey())).contains("Goku"))
                 .findFirst();
         assertTrue(gokuSpan.isPresent());
         Map<String, Object> goku = gokuSpan.get();
 
         Map<String, Object> gokuServer = getSpanByKindAndParentId(spans, SERVER, goku.get("spanId"));
-        assertEquals("/reactive?name=Goku", ((Map<?, ?>) gokuServer.get("attributes")).get(HTTP_TARGET.getKey()));
+        assertEquals("/reactive", ((Map<?, ?>) gokuServer.get("attributes")).get(URL_PATH.getKey()));
+        assertEquals("name=Goku", ((Map<?, ?>) gokuServer.get("attributes")).get(URL_QUERY.getKey()));
         Map<String, Object> gokuInternal = getSpanByKindAndParentId(spans, INTERNAL, gokuServer.get("spanId"));
         assertEquals("helloGet", gokuInternal.get("name"));
     }
@@ -176,25 +221,27 @@ public class OpenTelemetryReactiveTest {
 
         // Naruto Span
         Optional<Map<String, Object>> narutoSpan = clientSpans.stream()
-                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(HTTP_URL.getKey())).contains("Naruto"))
+                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(URL_FULL.getKey())).contains("Naruto"))
                 .findFirst();
         assertTrue(narutoSpan.isPresent());
         Map<String, Object> naruto = narutoSpan.get();
 
         Map<String, Object> narutoServer = getSpanByKindAndParentId(spans, SERVER, naruto.get("spanId"));
-        assertEquals("/reactive?name=Naruto", ((Map<?, ?>) narutoServer.get("attributes")).get(HTTP_TARGET.getKey()));
+        assertEquals("/reactive", ((Map<?, ?>) narutoServer.get("attributes")).get(URL_PATH.getKey()));
+        assertEquals("name=Naruto", ((Map<?, ?>) narutoServer.get("attributes")).get(URL_QUERY.getKey()));
         Map<String, Object> narutoInternal = getSpanByKindAndParentId(spans, INTERNAL, narutoServer.get("spanId"));
         assertEquals("helloGet", narutoInternal.get("name"));
 
         // Goku Span
         Optional<Map<String, Object>> gokuSpan = clientSpans.stream()
-                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(HTTP_URL.getKey())).contains("Goku"))
+                .filter(map -> ((String) ((Map<?, ?>) map.get("attributes")).get(URL_FULL.getKey())).contains("Goku"))
                 .findFirst();
         assertTrue(gokuSpan.isPresent());
         Map<String, Object> goku = gokuSpan.get();
 
         Map<String, Object> gokuServer = getSpanByKindAndParentId(spans, SERVER, goku.get("spanId"));
-        assertEquals("/reactive?name=Goku", ((Map<?, ?>) gokuServer.get("attributes")).get(HTTP_TARGET.getKey()));
+        assertEquals("/reactive", ((Map<?, ?>) gokuServer.get("attributes")).get(URL_PATH.getKey()));
+        assertEquals("name=Goku", ((Map<?, ?>) gokuServer.get("attributes")).get(URL_QUERY.getKey()));
         Map<String, Object> gokuInternal = getSpanByKindAndParentId(spans, INTERNAL, gokuServer.get("spanId"));
         assertEquals("helloGet", gokuInternal.get("name"));
     }
@@ -208,6 +255,7 @@ public class OpenTelemetryReactiveTest {
         await().atMost(5, SECONDS).until(() -> getSpans().size() == 1);
         assertThat(getSpans()).singleElement().satisfies(m -> {
             assertThat(m).extractingByKey("name").isEqualTo("GET /secured/item/{value}");
+            assertEvent(m, SecurityEventUtil.AUTHN_FAILURE_EVENT_NAME);
         });
     }
 
@@ -220,6 +268,34 @@ public class OpenTelemetryReactiveTest {
         await().atMost(5, SECONDS).until(() -> getSpans().size() == 1);
         assertThat(getSpans()).singleElement().satisfies(m -> {
             assertThat(m).extractingByKey("name").isEqualTo("GET /secured/item/{value}");
+            assertEvent(m, SecurityEventUtil.AUTHN_SUCCESS_EVENT_NAME, SecurityEventUtil.AUTHZ_SUCCESS_EVENT_NAME);
         });
+    }
+
+    private static void assertEvent(Map<String, Object> spanData, String... expectedEventNames) {
+        String spanName = (String) spanData.get("name");
+        var events = (List) spanData.get("events");
+        Assertions.assertEquals(expectedEventNames.length, events.size());
+        for (String expectedEventName : expectedEventNames) {
+            boolean foundEvent = events.stream().anyMatch(m -> expectedEventName.equals(((Map) m).get("name")));
+            assertTrue(foundEvent, "Span '%s' did not contain event '%s'".formatted(spanName, expectedEventName));
+            assertEventAttributes(spanName, expectedEventName);
+        }
+    }
+
+    private static void assertEventAttributes(String spanName, String eventName) {
+        var attrs = getSpanEventAttrs(spanName, eventName);
+        switch (eventName) {
+            case SecurityEventUtil.AUTHN_FAILURE_EVENT_NAME:
+                assertEquals(AuthenticationFailedException.class.getName(), attrs.get(SecurityEventUtil.FAILURE_NAME));
+                break;
+            case SecurityEventUtil.AUTHN_SUCCESS_EVENT_NAME:
+            case SecurityEventUtil.AUTHZ_SUCCESS_EVENT_NAME:
+                assertEquals("scott", attrs.get(SecurityEventUtil.SECURITY_IDENTITY_PRINCIPAL));
+                assertEquals(Boolean.FALSE, attrs.get(SecurityEventUtil.SECURITY_IDENTITY_IS_ANONYMOUS));
+                break;
+            default:
+                Assertions.fail("Unknown event name " + eventName);
+        }
     }
 }

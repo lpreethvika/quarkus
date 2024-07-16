@@ -18,6 +18,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import jakarta.enterprise.inject.CreationException;
+
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 import org.jose4j.jwk.JsonWebKey;
@@ -36,22 +38,24 @@ import io.quarkus.oidc.SecurityEvent;
 import io.quarkus.oidc.TenantConfigResolver;
 import io.quarkus.oidc.TenantIdentityProvider;
 import io.quarkus.oidc.common.OidcEndpoint;
+import io.quarkus.oidc.common.OidcRequestContextProperties;
 import io.quarkus.oidc.common.OidcRequestFilter;
 import io.quarkus.oidc.common.runtime.OidcCommonConfig;
 import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.runtime.LaunchMode;
-import io.quarkus.runtime.RuntimeValue;
-import io.quarkus.runtime.TlsConfig;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.runtime.configuration.ConfigurationException;
+import io.quarkus.security.AuthenticationFailedException;
 import io.quarkus.security.identity.AuthenticationRequestContext;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.identity.request.TokenAuthenticationRequest;
 import io.quarkus.security.spi.runtime.BlockingSecurityExecutor;
-import io.quarkus.security.spi.runtime.MethodDescription;
 import io.quarkus.security.spi.runtime.SecurityEventHelper;
+import io.quarkus.tls.TlsConfiguration;
+import io.quarkus.tls.TlsConfigurationRegistry;
 import io.smallrye.jwt.algorithm.KeyEncryptionAlgorithm;
 import io.smallrye.jwt.util.KeyUtils;
+import io.smallrye.mutiny.TimeoutException;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
@@ -68,6 +72,7 @@ public class OidcRecorder {
 
     private static final Map<String, TenantConfigContext> dynamicTenantsConfig = new ConcurrentHashMap<>();
     private static final Set<String> tenantsExpectingServerAvailableEvents = ConcurrentHashMap.newKeySet();
+    private static volatile boolean userInfoInjectionPointDetected = false;
 
     public Supplier<DefaultTokenIntrospectionUserInfoCache> setupTokenCache(OidcConfig config, Supplier<Vertx> vertx) {
         return new Supplier<DefaultTokenIntrospectionUserInfoCache>() {
@@ -78,53 +83,72 @@ public class OidcRecorder {
         };
     }
 
-    public Supplier<TenantConfigBean> setup(OidcConfig config, Supplier<Vertx> vertx, TlsConfig tlsConfig) {
-        final Vertx vertxValue = vertx.get();
+    public Supplier<TenantConfigBean> createTenantConfigBean(OidcConfig config, Supplier<Vertx> vertx,
+            Supplier<TlsConfigurationRegistry> registrySupplier,
+            boolean userInfoInjectionPointDetected) {
+        return new Supplier<TenantConfigBean>() {
+            @Override
+            public TenantConfigBean get() {
+                var defaultTlsConfiguration = registrySupplier.get().getDefault().orElse(null);
+                return setup(config, vertx.get(), defaultTlsConfiguration, userInfoInjectionPointDetected);
+            }
+        };
+    }
+
+    public void initTenantConfigBean() {
+        try {
+            // makes sure that config of static tenants is validated during app startup and create static tenant contexts
+            Arc.container().instance(TenantConfigBean.class).get();
+        } catch (CreationException wrapper) {
+            if (wrapper.getCause() instanceof RuntimeException runtimeException) {
+                // so that users see ConfigurationException etc. without noise
+                throw runtimeException;
+            }
+            throw wrapper;
+        }
+    }
+
+    public TenantConfigBean setup(OidcConfig config, Vertx vertxValue, TlsConfiguration defaultTlsConfiguration,
+            boolean userInfoInjectionPointDetected) {
+        OidcRecorder.userInfoInjectionPointDetected = userInfoInjectionPointDetected;
 
         String defaultTenantId = config.defaultTenant.getTenantId().orElse(DEFAULT_TENANT_ID);
         TenantConfigContext defaultTenantContext = createStaticTenantContext(vertxValue, config.defaultTenant,
-                !config.namedTenants.isEmpty(), tlsConfig, defaultTenantId);
+                !config.namedTenants.isEmpty(), defaultTenantId, defaultTlsConfiguration);
 
         Map<String, TenantConfigContext> staticTenantsConfig = new HashMap<>();
         for (Map.Entry<String, OidcTenantConfig> tenant : config.namedTenants.entrySet()) {
             OidcCommonUtils.verifyConfigurationId(defaultTenantId, tenant.getKey(), tenant.getValue().getTenantId());
             staticTenantsConfig.put(tenant.getKey(),
-                    createStaticTenantContext(vertxValue, tenant.getValue(), false, tlsConfig, tenant.getKey()));
+                    createStaticTenantContext(vertxValue, tenant.getValue(), false, tenant.getKey(), defaultTlsConfiguration));
         }
 
-        return new Supplier<TenantConfigBean>() {
-            @Override
-            public TenantConfigBean get() {
-                return new TenantConfigBean(staticTenantsConfig, dynamicTenantsConfig, defaultTenantContext,
-                        new Function<OidcTenantConfig, Uni<TenantConfigContext>>() {
-                            @Override
-                            public Uni<TenantConfigContext> apply(OidcTenantConfig config) {
-                                return createDynamicTenantContext(vertxValue, config, tlsConfig, config.getTenantId().get());
-                            }
-                        });
-            }
-        };
-    }
-
-    public RuntimeValue<MethodDescription> methodInfoToDescription(String className, String methodName, String[] paramTypes) {
-        return new RuntimeValue<>(new MethodDescription(className, methodName, paramTypes));
+        return new TenantConfigBean(staticTenantsConfig, dynamicTenantsConfig, defaultTenantContext,
+                new Function<OidcTenantConfig, Uni<TenantConfigContext>>() {
+                    @Override
+                    public Uni<TenantConfigContext> apply(OidcTenantConfig config) {
+                        return createDynamicTenantContext(vertxValue, config, config.getTenantId().get(),
+                                defaultTlsConfiguration);
+                    }
+                });
     }
 
     private Uni<TenantConfigContext> createDynamicTenantContext(Vertx vertx,
-            OidcTenantConfig oidcConfig, TlsConfig tlsConfig, String tenantId) {
+            OidcTenantConfig oidcConfig, String tenantId, TlsConfiguration defaultTlsConfiguration) {
 
         if (oidcConfig.logout.backchannel.path.isPresent()) {
             throw new ConfigurationException(
                     "BackChannel Logout is currently not supported for dynamic tenants");
         }
         if (!dynamicTenantsConfig.containsKey(tenantId)) {
-            Uni<TenantConfigContext> uniContext = createTenantContext(vertx, oidcConfig, false, tlsConfig, tenantId);
-            uniContext.onFailure().transform(new Function<Throwable, Throwable>() {
-                @Override
-                public Throwable apply(Throwable t) {
-                    return logTenantConfigContextFailure(t, tenantId);
-                }
-            });
+            Uni<TenantConfigContext> uniContext = createTenantContext(vertx, oidcConfig, false, tenantId,
+                    defaultTlsConfiguration)
+                    .onFailure().transform(new Function<Throwable, Throwable>() {
+                        @Override
+                        public Throwable apply(Throwable t) {
+                            return logTenantConfigContextFailure(t, tenantId);
+                        }
+                    });
             return uniContext.onItem().transform(
                     new Function<TenantConfigContext, TenantConfigContext>() {
                         @Override
@@ -139,32 +163,42 @@ public class OidcRecorder {
     }
 
     private TenantConfigContext createStaticTenantContext(Vertx vertx,
-            OidcTenantConfig oidcConfig, boolean checkNamedTenants, TlsConfig tlsConfig, String tenantId) {
+            OidcTenantConfig oidcConfig, boolean checkNamedTenants, String tenantId,
+            TlsConfiguration defaultTlsConfiguration) {
 
-        Uni<TenantConfigContext> uniContext = createTenantContext(vertx, oidcConfig, checkNamedTenants, tlsConfig, tenantId);
-        return uniContext.onFailure()
-                .recoverWithItem(new Function<Throwable, TenantConfigContext>() {
-                    @Override
-                    public TenantConfigContext apply(Throwable t) {
-                        if (t instanceof OIDCException) {
-                            LOG.warnf("Tenant '%s': '%s'."
-                                    + " OIDC server is not available yet, an attempt to connect will be made during the first request."
-                                    + " Access to resources protected by this tenant may fail"
-                                    + " if OIDC server will not become available",
-                                    tenantId, t.getMessage());
-                            return new TenantConfigContext(null, oidcConfig, false);
+        Uni<TenantConfigContext> uniContext = createTenantContext(vertx, oidcConfig, checkNamedTenants, tenantId,
+                defaultTlsConfiguration);
+        try {
+            return uniContext.onFailure()
+                    .recoverWithItem(new Function<Throwable, TenantConfigContext>() {
+                        @Override
+                        public TenantConfigContext apply(Throwable t) {
+                            if (t instanceof OIDCException) {
+                                LOG.warnf("Tenant '%s': '%s'."
+                                        + " OIDC server is not available yet, an attempt to connect will be made during the first request."
+                                        + " Access to resources protected by this tenant may fail"
+                                        + " if OIDC server will not become available",
+                                        tenantId, t.getMessage());
+                                return new TenantConfigContext(null, oidcConfig, false);
+                            }
+                            logTenantConfigContextFailure(t, tenantId);
+                            if (t instanceof ConfigurationException
+                                    && !oidcConfig.authServerUrl.isPresent()
+                                    && LaunchMode.DEVELOPMENT == LaunchMode.current()) {
+                                // Let it start if it is a DEV mode and auth-server-url has not been configured yet
+                                return new TenantConfigContext(null, oidcConfig, false);
+                            }
+                            // fail in all other cases
+                            throw new OIDCException(t);
                         }
-                        logTenantConfigContextFailure(t, tenantId);
-                        if (t instanceof ConfigurationException
-                                && !oidcConfig.authServerUrl.isPresent() && LaunchMode.DEVELOPMENT == LaunchMode.current()) {
-                            // Let it start if it is a DEV mode and auth-server-url has not been configured yet
-                            return new TenantConfigContext(null, oidcConfig, false);
-                        }
-                        // fail in all other cases
-                        throw new OIDCException(t);
-                    }
-                })
-                .await().atMost(oidcConfig.getConnectionTimeout());
+                    })
+                    .await().atMost(oidcConfig.getConnectionTimeout());
+        } catch (TimeoutException t2) {
+            LOG.warnf("Tenant '%s': OIDC server is not available after a %d seconds timeout, an attempt to connect will be made"
+                    + " during the first request. Access to resources protected by this tenant may fail if OIDC server"
+                    + " will not become available", tenantId, oidcConfig.getConnectionTimeout().getSeconds());
+            return new TenantConfigContext(null, oidcConfig, false);
+        }
     }
 
     private static Throwable logTenantConfigContextFailure(Throwable t, String tenantId) {
@@ -176,8 +210,7 @@ public class OidcRecorder {
 
     @SuppressWarnings("resource")
     private Uni<TenantConfigContext> createTenantContext(Vertx vertx, OidcTenantConfig oidcTenantConfig,
-            boolean checkNamedTenants,
-            TlsConfig tlsConfig, String tenantId) {
+            boolean checkNamedTenants, String tenantId, TlsConfiguration defaultTlsConfiguration) {
         if (!oidcTenantConfig.tenantId.isPresent()) {
             oidcTenantConfig.tenantId = Optional.of(tenantId);
         }
@@ -216,7 +249,8 @@ public class OidcRecorder {
                                 .item(new TenantConfigContext(new OidcProvider(null, null, null, null), oidcConfig));
                     }
                 }
-                throw new ConfigurationException("'quarkus.oidc.auth-server-url' property must be configured");
+                throw new ConfigurationException(
+                        "'" + getConfigPropertyForTenant(tenantId, "auth-server-url") + "' property must be configured");
             }
             OidcCommonUtils.verifyEndpointUrl(oidcConfig.getAuthServerUrl().get());
             OidcCommonUtils.verifyCommonConfiguration(oidcConfig, OidcUtils.isServiceApp(oidcConfig), true);
@@ -241,10 +275,13 @@ public class OidcRecorder {
         if (!oidcConfig.discoveryEnabled.orElse(true)) {
             if (!OidcUtils.isServiceApp(oidcConfig)) {
                 if (!oidcConfig.authorizationPath.isPresent() || !oidcConfig.tokenPath.isPresent()) {
+                    String authorizationPathProperty = getConfigPropertyForTenant(tenantId, "authorization-path");
+                    String tokenPathProperty = getConfigPropertyForTenant(tenantId, "token-path");
                     throw new ConfigurationException(
-                            "'web-app' applications must have 'authorization-path' and 'token-path' properties "
+                            "'web-app' applications must have '" + authorizationPathProperty + "' and '" + tokenPathProperty
+                                    + "' properties "
                                     + "set when the discovery is disabled.",
-                            Set.of("quarkus.oidc.authorization-path", "quarkus.oidc.token-path"));
+                            Set.of(authorizationPathProperty, tokenPathProperty));
                 }
             }
             // JWK and introspection endpoints have to be set for both 'web-app' and 'service' applications
@@ -259,31 +296,35 @@ public class OidcRecorder {
                 }
             }
             if (oidcConfig.authentication.userInfoRequired.orElse(false) && !oidcConfig.userInfoPath.isPresent()) {
+                String configProperty = getConfigPropertyForTenant(tenantId, "user-info-path");
                 throw new ConfigurationException(
-                        "UserInfo is required but 'quarkus.oidc.user-info-path' is not configured.",
-                        Set.of("quarkus.oidc.user-info-path"));
+                        "UserInfo is required but '" + configProperty + "' is not configured.",
+                        Set.of(configProperty));
             }
         }
 
         if (OidcUtils.isServiceApp(oidcConfig)) {
             if (oidcConfig.token.refreshExpired) {
                 throw new ConfigurationException(
-                        "The 'token.refresh-expired' property can only be enabled for " + ApplicationType.WEB_APP
+                        "The '" + getConfigPropertyForTenant(tenantId, "token.refresh-expired")
+                                + "' property can only be enabled for " + ApplicationType.WEB_APP
                                 + " application types");
             }
             if (!oidcConfig.token.refreshTokenTimeSkew.isEmpty()) {
                 throw new ConfigurationException(
-                        "The 'token.refresh-token-time-skew' property can only be enabled for " + ApplicationType.WEB_APP
+                        "The '" + getConfigPropertyForTenant(tenantId, "token.refresh-token-time-skew")
+                                + "' property can only be enabled for " + ApplicationType.WEB_APP
                                 + " application types");
             }
             if (oidcConfig.logout.path.isPresent()) {
                 throw new ConfigurationException(
-                        "The 'logout.path' property can only be enabled for " + ApplicationType.WEB_APP
-                                + " application types");
+                        "The '" + getConfigPropertyForTenant(tenantId, "logout.path") + "' property can only be enabled for "
+                                + ApplicationType.WEB_APP + " application types");
             }
             if (oidcConfig.roles.source.isPresent() && oidcConfig.roles.source.get() == Source.idtoken) {
                 throw new ConfigurationException(
-                        "The 'roles.source' property can only be set to 'idtoken' for " + ApplicationType.WEB_APP
+                        "The '" + getConfigPropertyForTenant(tenantId, "roles.source")
+                                + "' property can only be set to 'idtoken' for " + ApplicationType.WEB_APP
                                 + " application types");
             }
         } else {
@@ -318,13 +359,30 @@ public class OidcRecorder {
             }
         }
 
-        return createOidcProvider(oidcConfig, tlsConfig, vertx)
+        if (!oidcConfig.token.isIssuedAtRequired() && oidcConfig.token.getAge().isPresent()) {
+            String tokenIssuedAtRequired = getConfigPropertyForTenant(tenantId, "token.issued-at-required");
+            String tokenAge = getConfigPropertyForTenant(tenantId, "token.age");
+            throw new ConfigurationException(
+                    "The '" + tokenIssuedAtRequired + "' can only be set to false if '" + tokenAge + "' is not set." +
+                            " Either set '" + tokenIssuedAtRequired + "' to true or do not set '" + tokenAge + "'.",
+                    Set.of(tokenIssuedAtRequired, tokenAge));
+        }
+
+        return createOidcProvider(oidcConfig, vertx, defaultTlsConfiguration)
                 .onItem().transform(new Function<OidcProvider, TenantConfigContext>() {
                     @Override
                     public TenantConfigContext apply(OidcProvider p) {
                         return new TenantConfigContext(p, oidcConfig);
                     }
                 });
+    }
+
+    private static String getConfigPropertyForTenant(String tenantId, String configSubKey) {
+        if (DEFAULT_TENANT_ID.equals(tenantId)) {
+            return "quarkus.oidc." + configSubKey;
+        } else {
+            return "quarkus.oidc." + tenantId + "." + configSubKey;
+        }
     }
 
     private static boolean enableUserInfo(OidcTenantConfig oidcConfig) {
@@ -371,9 +429,10 @@ public class OidcRecorder {
         return new OIDCException("OIDC Server is not available", cause);
     }
 
-    protected static Uni<OidcProvider> createOidcProvider(OidcTenantConfig oidcConfig, TlsConfig tlsConfig, Vertx vertx) {
-        return createOidcClientUni(oidcConfig, tlsConfig, vertx).onItem()
-                .transformToUni(new Function<OidcProviderClient, Uni<? extends OidcProvider>>() {
+    protected static Uni<OidcProvider> createOidcProvider(OidcTenantConfig oidcConfig, Vertx vertx,
+            TlsConfiguration defaultTlsConfiguration) {
+        return createOidcClientUni(oidcConfig, vertx, defaultTlsConfiguration)
+                .flatMap(new Function<OidcProviderClient, Uni<? extends OidcProvider>>() {
                     @Override
                     public Uni<OidcProvider> apply(OidcProviderClient client) {
                         if (oidcConfig.jwks.resolveEarly
@@ -462,16 +521,16 @@ public class OidcRecorder {
                 .invoke(client::close);
     }
 
-    protected static Uni<OidcProviderClient> createOidcClientUni(OidcTenantConfig oidcConfig,
-            TlsConfig tlsConfig, Vertx vertx) {
+    protected static Uni<OidcProviderClient> createOidcClientUni(OidcTenantConfig oidcConfig, Vertx vertx,
+            TlsConfiguration defaultTlsConfiguration) {
 
         String authServerUriString = OidcCommonUtils.getAuthServerUrl(oidcConfig);
 
         WebClientOptions options = new WebClientOptions();
 
-        OidcCommonUtils.setHttpClientOptions(oidcConfig, tlsConfig, options);
-
-        WebClient client = WebClient.create(new io.vertx.mutiny.core.Vertx(vertx), options);
+        OidcCommonUtils.setHttpClientOptions(oidcConfig, options, defaultTlsConfiguration);
+        var mutinyVertx = new io.vertx.mutiny.core.Vertx(vertx);
+        WebClient client = WebClient.create(mutinyVertx, options);
 
         Map<OidcEndpoint.Type, List<OidcRequestFilter>> oidcRequestFilters = OidcCommonUtils.getOidcRequestFilters();
 
@@ -480,8 +539,12 @@ public class OidcRecorder {
             metadataUni = Uni.createFrom().item(createLocalMetadata(oidcConfig, authServerUriString));
         } else {
             final long connectionDelayInMillisecs = OidcCommonUtils.getConnectionDelayInMillis(oidcConfig);
+            OidcRequestContextProperties contextProps = new OidcRequestContextProperties(
+                    Map.of(OidcUtils.TENANT_ID_ATTRIBUTE, oidcConfig.getTenantId().orElse(OidcUtils.DEFAULT_TENANT_ID)));
             metadataUni = OidcCommonUtils
-                    .discoverMetadata(client, oidcRequestFilters, authServerUriString, connectionDelayInMillisecs)
+                    .discoverMetadata(client, oidcRequestFilters, contextProps, authServerUriString, connectionDelayInMillisecs,
+                            mutinyVertx,
+                            oidcConfig.useBlockingDnsLookup)
                     .onItem()
                     .transform(new Function<JsonObject, OidcConfigurationMetadata>() {
                         @Override
@@ -515,6 +578,9 @@ public class OidcRecorder {
                                 return Uni.createFrom().failure(new ConfigurationException(
                                         "The application supports RP-Initiated Logout but the OpenID Provider does not advertise the end_session_endpoint"));
                             }
+                        }
+                        if (userInfoInjectionPointDetected && metadata.getUserInfoUri() != null) {
+                            enableUserInfo(oidcConfig);
                         }
                         if (oidcConfig.authentication.userInfoRequired.orElse(false) && metadata.getUserInfoUri() == null) {
                             client.close();
@@ -569,11 +635,43 @@ public class OidcRecorder {
         return false;
     }
 
-    public Consumer<RoutingContext> createTenantResolverInterceptor(String tenantId) {
-        return new Consumer<RoutingContext>() {
+    public Function<String, Consumer<RoutingContext>> tenantResolverInterceptorCreator() {
+        return new Function<String, Consumer<RoutingContext>>() {
             @Override
-            public void accept(RoutingContext routingContext) {
-                routingContext.put(OidcUtils.TENANT_ID_ATTRIBUTE, tenantId);
+            public Consumer<RoutingContext> apply(String tenantId) {
+                return new Consumer<RoutingContext>() {
+                    @Override
+                    public void accept(RoutingContext routingContext) {
+                        OidcTenantConfig tenantConfig = routingContext.get(OidcTenantConfig.class.getName());
+                        if (tenantConfig != null) {
+                            // authentication has happened before @Tenant annotation was matched with the HTTP request
+                            String tenantUsedForAuth = tenantConfig.tenantId.orElse(null);
+                            if (tenantId.equals(tenantUsedForAuth)) {
+                                // @Tenant selects the same tenant as already selected
+                                return;
+                            } else {
+                                // @Tenant selects the different tenant than already selected
+                                throw new AuthenticationFailedException(
+                                        """
+                                                The '%1$s' selected with the @Tenant annotation must be used to authenticate
+                                                the request but it was already authenticated with the '%2$s' tenant. It
+                                                can happen if the '%1$s' is selected with an annotation but '%2$s' is
+                                                resolved during authentication required by the HTTP Security Policy which
+                                                is enforced before the JAX-RS chain is run. In such cases, please set the
+                                                'quarkus.http.auth.permission."permissions".applies-to=JAXRS' to all HTTP
+                                                Security Policies which secure the same REST endpoints as the ones
+                                                where the '%1$s' tenant is resolved by the '@Tenant' annotation.
+                                                """
+                                                .formatted(tenantId, tenantUsedForAuth));
+                            }
+                        }
+
+                        LOG.debugf("@Tenant annotation set a '%s' tenant id on the %s request path", tenantId,
+                                routingContext.request().path());
+                        routingContext.put(OidcUtils.TENANT_ID_SET_BY_ANNOTATION, tenantId);
+                        routingContext.put(OidcUtils.TENANT_ID_ATTRIBUTE, tenantId);
+                    }
+                };
             }
         };
     }

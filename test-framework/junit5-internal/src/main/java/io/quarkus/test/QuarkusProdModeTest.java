@@ -74,7 +74,7 @@ import io.quarkus.utilities.JavaBinFinder;
 public class QuarkusProdModeTest
         implements BeforeAllCallback, AfterAllCallback, BeforeEachCallback, TestWatcher, InvocationInterceptor {
 
-    private static final String EXPECTED_OUTPUT_FROM_SUCCESSFULLY_STARTED = "features";
+    private static final String EXPECTED_OUTPUT_FROM_SUCCESSFULLY_STARTED = "Installed features";
     private static final int DEFAULT_HTTP_PORT_INT = 8081;
     private static final String DEFAULT_HTTP_PORT = "" + DEFAULT_HTTP_PORT_INT;
     private static final String QUARKUS_HTTP_PORT_PROPERTY = "quarkus.http.port";
@@ -410,7 +410,7 @@ public class QuarkusProdModeTest
                 overrideConfigKey("quarkus.application.version", applicationVersion);
             }
             if (buildNative) {
-                overrideConfigKey("quarkus.package.type", "native");
+                overrideConfigKey("quarkus.native.enabled", "true");
             }
             exportArchive(deploymentDir, testClass);
 

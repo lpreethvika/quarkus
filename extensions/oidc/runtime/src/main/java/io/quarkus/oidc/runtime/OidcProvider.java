@@ -3,6 +3,7 @@ package io.quarkus.oidc.runtime;
 import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
+import java.security.PrivateKey;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -35,7 +36,6 @@ import io.quarkus.oidc.AuthorizationCodeTokens;
 import io.quarkus.oidc.OIDCException;
 import io.quarkus.oidc.OidcConfigurationMetadata;
 import io.quarkus.oidc.OidcTenantConfig;
-import io.quarkus.oidc.OidcTenantConfig.CertificateChain;
 import io.quarkus.oidc.TokenCustomizer;
 import io.quarkus.oidc.TokenIntrospection;
 import io.quarkus.oidc.UserInfo;
@@ -50,7 +50,6 @@ import io.smallrye.mutiny.Uni;
 public class OidcProvider implements Closeable {
 
     private static final Logger LOG = Logger.getLogger(OidcProvider.class);
-    private static final String ANY_ISSUER = "any";
     private static final String ANY_AUDIENCE = "any";
     private static final String[] ASYMMETRIC_SUPPORTED_ALGORITHMS = new String[] { SignatureAlgorithm.RS256.getAlgorithm(),
             SignatureAlgorithm.RS384.getAlgorithm(),
@@ -66,7 +65,9 @@ public class OidcProvider implements Closeable {
             AlgorithmConstraints.ConstraintType.PERMIT, ASYMMETRIC_SUPPORTED_ALGORITHMS);
     private static final AlgorithmConstraints SYMMETRIC_ALGORITHM_CONSTRAINTS = new AlgorithmConstraints(
             AlgorithmConstraints.ConstraintType.PERMIT, SignatureAlgorithm.HS256.getAlgorithm());
+    static final String ANY_ISSUER = "any";
 
+    private final List<Validator> customValidators;
     final OidcProviderClient client;
     final RefreshableVerificationKeyResolver asymmetricKeyResolver;
     final DynamicVerificationKeyResolver keyResolverProvider;
@@ -79,16 +80,23 @@ public class OidcProvider implements Closeable {
     final AlgorithmConstraints requiredAlgorithmConstraints;
 
     public OidcProvider(OidcProviderClient client, OidcTenantConfig oidcConfig, JsonWebKeySet jwks, Key tokenDecryptionKey) {
-        this(client, oidcConfig, jwks, TokenCustomizerFinder.find(oidcConfig), tokenDecryptionKey);
+        this(client, oidcConfig, jwks, TenantFeatureFinder.find(oidcConfig), tokenDecryptionKey,
+                TenantFeatureFinder.find(oidcConfig, Validator.class));
     }
 
     public OidcProvider(OidcProviderClient client, OidcTenantConfig oidcConfig, JsonWebKeySet jwks,
-            TokenCustomizer tokenCustomizer, Key tokenDecryptionKey) {
+            TokenCustomizer tokenCustomizer, Key tokenDecryptionKey, List<Validator> customValidators) {
         this.client = client;
         this.oidcConfig = oidcConfig;
         this.tokenCustomizer = tokenCustomizer;
-        this.asymmetricKeyResolver = jwks == null ? null
-                : new JsonWebKeyResolver(jwks, oidcConfig.token.forcedJwkRefreshInterval, oidcConfig.certificateChain);
+        if (jwks != null) {
+            this.asymmetricKeyResolver = new JsonWebKeyResolver(jwks, oidcConfig.token.forcedJwkRefreshInterval);
+        } else if (oidcConfig != null && oidcConfig.certificateChain.trustStoreFile.isPresent()) {
+            this.asymmetricKeyResolver = new CertChainPublicKeyResolver(oidcConfig);
+        } else {
+            this.asymmetricKeyResolver = null;
+        }
+
         if (client != null && oidcConfig != null && !oidcConfig.jwks.resolveEarly) {
             this.keyResolverProvider = new DynamicVerificationKeyResolver(client, oidcConfig);
         } else {
@@ -99,16 +107,17 @@ public class OidcProvider implements Closeable {
         this.requiredClaims = checkRequiredClaimsProp();
         this.tokenDecryptionKey = tokenDecryptionKey;
         this.requiredAlgorithmConstraints = checkSignatureAlgorithm();
+        this.customValidators = customValidators == null ? List.of() : customValidators;
     }
 
     public OidcProvider(String publicKeyEnc, OidcTenantConfig oidcConfig, Key tokenDecryptionKey) {
         this.client = null;
         this.oidcConfig = oidcConfig;
-        this.tokenCustomizer = TokenCustomizerFinder.find(oidcConfig);
+        this.tokenCustomizer = TenantFeatureFinder.find(oidcConfig);
         if (publicKeyEnc != null) {
             this.asymmetricKeyResolver = new LocalPublicKeyResolver(publicKeyEnc);
         } else if (oidcConfig.certificateChain.trustStoreFile.isPresent()) {
-            this.asymmetricKeyResolver = new CertChainPublicKeyResolver(oidcConfig.certificateChain);
+            this.asymmetricKeyResolver = new CertChainPublicKeyResolver(oidcConfig);
         } else {
             throw new IllegalStateException("Neither public key nor certificate chain verification modes are enabled");
         }
@@ -118,6 +127,7 @@ public class OidcProvider implements Closeable {
         this.requiredClaims = checkRequiredClaimsProp();
         this.tokenDecryptionKey = tokenDecryptionKey;
         this.requiredAlgorithmConstraints = checkSignatureAlgorithm();
+        this.customValidators = TenantFeatureFinder.find(oidcConfig, Validator.class);
     }
 
     private AlgorithmConstraints checkSignatureAlgorithm() {
@@ -149,9 +159,11 @@ public class OidcProvider implements Closeable {
         return oidcConfig != null ? oidcConfig.token.requiredClaims : null;
     }
 
-    public TokenVerificationResult verifySelfSignedJwtToken(String token) throws InvalidJwtException {
-        return verifyJwtTokenInternal(token, true, false, null, SYMMETRIC_ALGORITHM_CONSTRAINTS, new SymmetricKeyResolver(),
-                true);
+    public TokenVerificationResult verifySelfSignedJwtToken(String token, Key generatedInternalSignatureKey)
+            throws InvalidJwtException {
+        return verifyJwtTokenInternal(token, true, false, null, SYMMETRIC_ALGORITHM_CONSTRAINTS,
+                new InternalSignatureKeyResolver(generatedInternalSignatureKey),
+                true, oidcConfig.token.isIssuedAtRequired());
     }
 
     public TokenVerificationResult verifyJwtToken(String token, boolean enforceAudienceVerification, boolean subjectRequired,
@@ -159,14 +171,14 @@ public class OidcProvider implements Closeable {
             throws InvalidJwtException {
         return verifyJwtTokenInternal(customizeJwtToken(token), enforceAudienceVerification, subjectRequired, nonce,
                 (requiredAlgorithmConstraints != null ? requiredAlgorithmConstraints : ASYMMETRIC_ALGORITHM_CONSTRAINTS),
-                asymmetricKeyResolver, true);
+                asymmetricKeyResolver, true, oidcConfig.token.isIssuedAtRequired());
     }
 
     public TokenVerificationResult verifyLogoutJwtToken(String token) throws InvalidJwtException {
         final boolean enforceExpReq = !oidcConfig.token.age.isPresent();
         TokenVerificationResult result = verifyJwtTokenInternal(token, true, false, null, ASYMMETRIC_ALGORITHM_CONSTRAINTS,
                 asymmetricKeyResolver,
-                enforceExpReq);
+                enforceExpReq, oidcConfig.token.isIssuedAtRequired());
         if (!enforceExpReq) {
             // Expiry check was skipped during the initial verification but if the logout token contains the exp claim
             // then it must be verified
@@ -184,7 +196,8 @@ public class OidcProvider implements Closeable {
             boolean subjectRequired,
             String nonce,
             AlgorithmConstraints algConstraints,
-            VerificationKeyResolver verificationKeyResolver, boolean enforceExpReq) throws InvalidJwtException {
+            VerificationKeyResolver verificationKeyResolver, boolean enforceExpReq, boolean issuedAtRequired)
+            throws InvalidJwtException {
         JwtConsumerBuilder builder = new JwtConsumerBuilder();
 
         builder.setVerificationKeyResolver(verificationKeyResolver);
@@ -202,7 +215,13 @@ public class OidcProvider implements Closeable {
             builder.registerValidator(new CustomClaimsValidator(Map.of(OidcConstants.NONCE, nonce)));
         }
 
-        builder.setRequireIssuedAt();
+        for (Validator customValidator : customValidators) {
+            builder.registerValidator(customValidator);
+        }
+
+        if (issuedAtRequired) {
+            builder.setRequireIssuedAt();
+        }
 
         if (issuer != null) {
             builder.setExpectedIssuer(issuer);
@@ -239,7 +258,10 @@ public class OidcProvider implements Closeable {
                 detail = details.get(0).getErrorMessage();
             }
             if (oidcConfig.clientId.isPresent()) {
-                LOG.debugf("Verification of the token issued to client %s has failed: %s", oidcConfig.clientId.get(), detail);
+                LOG.debugf("Verification of the token issued to client %s has failed: %s.", oidcConfig.clientId.get(), detail);
+                if (oidcConfig.clientName.isPresent()) {
+                    LOG.debugf(" Client name: %s", oidcConfig.clientName.get());
+                }
             } else {
                 LOG.debugf("Token verification has failed: %s", detail);
             }
@@ -301,7 +323,7 @@ public class OidcProvider implements Closeable {
 
     public Uni<TokenVerificationResult> getKeyResolverAndVerifyJwtToken(TokenCredential tokenCred,
             boolean enforceAudienceVerification,
-            boolean subjectRequired, String nonce) {
+            boolean subjectRequired, String nonce, boolean issuedAtRequired) {
         return keyResolverProvider.resolve(tokenCred).onItem()
                 .transformToUni(new Function<VerificationKeyResolver, Uni<? extends TokenVerificationResult>>() {
 
@@ -314,7 +336,7 @@ public class OidcProvider implements Closeable {
                                             subjectRequired, nonce,
                                             (requiredAlgorithmConstraints != null ? requiredAlgorithmConstraints
                                                     : ASYMMETRIC_ALGORITHM_CONSTRAINTS),
-                                            resolver, true));
+                                            resolver, true, issuedAtRequired));
                         } catch (Throwable t) {
                             return Uni.createFrom().failure(t);
                         }
@@ -409,11 +431,11 @@ public class OidcProvider implements Closeable {
         volatile long forcedJwksRefreshIntervalMilliSecs;
         final CertChainPublicKeyResolver chainResolverFallback;
 
-        JsonWebKeyResolver(JsonWebKeySet jwks, Duration forcedJwksRefreshInterval, CertificateChain chain) {
+        JsonWebKeyResolver(JsonWebKeySet jwks, Duration forcedJwksRefreshInterval) {
             this.jwks = jwks;
             this.forcedJwksRefreshIntervalMilliSecs = forcedJwksRefreshInterval.toMillis();
-            if (chain.trustStoreFile.isPresent()) {
-                chainResolverFallback = new CertChainPublicKeyResolver(chain);
+            if (oidcConfig.certificateChain.trustStoreFile.isPresent()) {
+                chainResolverFallback = new CertChainPublicKeyResolver(oidcConfig);
             } else {
                 chainResolverFallback = null;
             }
@@ -548,16 +570,36 @@ public class OidcProvider implements Closeable {
 
     }
 
-    private class SymmetricKeyResolver implements VerificationKeyResolver {
+    private class InternalSignatureKeyResolver implements VerificationKeyResolver {
+        final Key internalSignatureKey;
+
+        public InternalSignatureKeyResolver(Key generatedInternalSignatureKey) {
+            this.internalSignatureKey = initKey(generatedInternalSignatureKey);
+        }
+
         @Override
         public Key resolveKey(JsonWebSignature jws, List<JsonWebStructure> nestingContext)
                 throws UnresolvableKeyException {
-            return KeyUtils.createSecretKeyFromSecret(OidcCommonUtils.clientSecret(oidcConfig.credentials));
+            return internalSignatureKey;
+        }
+
+        private Key initKey(Key generatedInternalSignatureKey) {
+            String clientSecret = OidcCommonUtils.getClientOrJwtSecret(oidcConfig.credentials);
+            if (clientSecret != null) {
+                LOG.debug("Verifying internal ID token with a configured client secret");
+                return KeyUtils.createSecretKeyFromSecret(clientSecret);
+            } else if (client.getClientJwtKey() instanceof PrivateKey) {
+                LOG.debug("Verifying internal ID token with a configured JWT private key");
+                return OidcUtils.createSecretKeyFromDigest(((PrivateKey) client.getClientJwtKey()).getEncoded());
+            } else {
+                LOG.debug("Verifying internal ID token with a generated secret key");
+                return generatedInternalSignatureKey;
+            }
         }
     }
 
     public OidcConfigurationMetadata getMetadata() {
-        return client.getMetadata();
+        return client == null ? null : client.getMetadata();
     }
 
     private static class CustomClaimsValidator implements Validator {
@@ -588,4 +630,5 @@ public class OidcProvider implements Closeable {
             return null;
         }
     }
+
 }

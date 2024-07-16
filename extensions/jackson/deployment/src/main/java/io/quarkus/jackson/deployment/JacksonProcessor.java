@@ -34,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.annotation.JsonTypeIdResolver;
 import com.fasterxml.jackson.databind.module.SimpleModule;
@@ -63,11 +64,13 @@ import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.jackson.JacksonMixin;
 import io.quarkus.jackson.ObjectMapperCustomizer;
+import io.quarkus.jackson.runtime.ConfigurationCustomizer;
 import io.quarkus.jackson.runtime.JacksonBuildTimeConfig;
 import io.quarkus.jackson.runtime.JacksonSupport;
 import io.quarkus.jackson.runtime.JacksonSupportRecorder;
 import io.quarkus.jackson.runtime.MixinsRecorder;
 import io.quarkus.jackson.runtime.ObjectMapperProducer;
+import io.quarkus.jackson.runtime.VertxHybridPoolObjectMapperCustomizer;
 import io.quarkus.jackson.spi.ClassPathJacksonModuleBuildItem;
 import io.quarkus.jackson.spi.JacksonModuleBuildItem;
 
@@ -81,6 +84,7 @@ public class JacksonProcessor {
 
     private static final DotName JSON_TYPE_ID_RESOLVER = DotName.createSimple(JsonTypeIdResolver.class.getName());
     private static final DotName JSON_SUBTYPES = DotName.createSimple(JsonSubTypes.class.getName());
+    private static final DotName JACKSON_NAMING = DotName.createSimple(JsonNaming.class.getName());
     private static final DotName JSON_CREATOR = DotName.createSimple("com.fasterxml.jackson.annotation.JsonCreator");
 
     private static final DotName JSON_NAMING = DotName.createSimple("com.fasterxml.jackson.databind.annotation.JsonNaming");
@@ -108,9 +112,13 @@ public class JacksonProcessor {
     List<IgnoreJsonDeserializeClassBuildItem> ignoreJsonDeserializeClassBuildItems;
 
     @BuildStep
-    void unremovable(Capabilities capabilities, BuildProducer<UnremovableBeanBuildItem> producer) {
+    void unremovable(Capabilities capabilities, BuildProducer<UnremovableBeanBuildItem> producer,
+            BuildProducer<AdditionalBeanBuildItem> additionalProducer) {
+        additionalProducer.produce(AdditionalBeanBuildItem.unremovableOf(ConfigurationCustomizer.class));
+
         if (capabilities.isPresent(Capability.VERTX_CORE)) {
             producer.produce(UnremovableBeanBuildItem.beanTypes(ObjectMapper.class));
+            additionalProducer.produce(AdditionalBeanBuildItem.unremovableOf(VertxHybridPoolObjectMapperCustomizer.class));
         }
     }
 
@@ -292,16 +300,26 @@ public class JacksonProcessor {
                     .methods().fields().build());
         }
 
+        // register @JsonNaming for reflection
+        Set<String> namingTypesNames = new HashSet<>();
+        for (AnnotationInstance namingInstance : index.getAnnotations(JSON_NAMING)) {
+            AnnotationValue namingValue = namingInstance.value();
+            if (namingValue != null) {
+                namingTypesNames.add(namingValue.asClass().name().toString());
+            }
+        }
+        if (!namingTypesNames.isEmpty()) {
+            reflectiveClass.produce(ReflectiveClassBuildItem.builder(namingTypesNames.toArray(EMPTY_STRING)).build());
+        }
+
         // this needs to be registered manually since the runtime module is not indexed by Jandex
         additionalBeans.produce(new AdditionalBeanBuildItem(ObjectMapperProducer.class));
     }
 
     private void addReflectiveHierarchyClass(DotName className,
             BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchyClass) {
-        Type jandexType = Type.create(className, Type.Kind.CLASS);
-        reflectiveHierarchyClass.produce(new ReflectiveHierarchyBuildItem.Builder()
-                .type(jandexType)
-                .source(getClass().getSimpleName() + " > " + jandexType.name().toString())
+        reflectiveHierarchyClass.produce(ReflectiveHierarchyBuildItem.builder(className)
+                .source(getClass().getSimpleName() + " > " + className)
                 .build());
     }
 

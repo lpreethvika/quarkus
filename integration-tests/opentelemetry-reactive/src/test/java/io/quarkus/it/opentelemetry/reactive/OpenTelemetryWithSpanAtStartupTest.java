@@ -25,11 +25,11 @@ import com.github.tomakehurst.wiremock.client.WireMock;
 
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import io.quarkus.runtime.Startup;
-import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
+import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 
-@QuarkusTestResource(restrictToAnnotatedClass = true, value = OpenTelemetryWithSpanAtStartupTest.MyWireMockResource.class)
+@WithTestResource(OpenTelemetryWithSpanAtStartupTest.MyWireMockResource.class)
 @QuarkusTest
 public class OpenTelemetryWithSpanAtStartupTest {
 
@@ -47,7 +47,7 @@ public class OpenTelemetryWithSpanAtStartupTest {
 
         // We should get one client span, from the internal method.
         Map<String, Object> server = getSpanByKindAndParentId(spans, CLIENT, client.get("spanId"));
-        assertEquals("GET", server.get("name"));
+        assertEquals("GET /stub", server.get("name"));
     }
 
     @Startup

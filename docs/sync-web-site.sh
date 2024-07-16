@@ -38,9 +38,9 @@ if [ -z $TARGET_DIR ]; then
     GIT_OPTIONS="--depth=1"
   fi
   if [ -n "${RELEASE_GITHUB_TOKEN}" ]; then
-    git clone -b develop --single-branch $GIT_OPTIONS https://github.com/quarkusio/quarkusio.github.io.git ${TARGET_DIR}
+    git clone --single-branch $GIT_OPTIONS https://github.com/quarkusio/quarkusio.github.io.git ${TARGET_DIR}
   else
-    git clone -b develop --single-branch $GIT_OPTIONS git@github.com:quarkusio/quarkusio.github.io.git ${TARGET_DIR}
+    git clone --single-branch $GIT_OPTIONS git@github.com:quarkusio/quarkusio.github.io.git ${TARGET_DIR}
   fi
 fi
 
@@ -64,6 +64,11 @@ else
 :code-examples: {generated-dir}/examples
 :imagesdir: ./images
 :includes: ./_includes
+//
+:quickstarts-clone-url: -b ${BRANCH} https://github.com/quarkusio/quarkus-quickstarts.git
+:quickstarts-archive-url: https://github.com/quarkusio/quarkus-quickstarts/archive/${BRANCH}.zip
+:quickstarts-blob-url: https://github.com/quarkusio/quarkus-quickstarts/blob/${BRANCH}
+:quickstarts-tree-url: https://github.com/quarkusio/quarkus-quickstarts/tree/${BRANCH}
 // end::xref-attributes[]
 EOF
     fi
@@ -143,7 +148,7 @@ then
     cd target/web-site
     git add -A
     git commit -m "Sync web site with Quarkus documentation"
-    git push origin develop
+    git push origin main
     echo "Web Site updated - wait for CI build"
 else
     echo "

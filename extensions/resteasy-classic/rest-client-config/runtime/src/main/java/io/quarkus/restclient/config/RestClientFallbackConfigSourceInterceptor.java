@@ -38,6 +38,7 @@ public class RestClientFallbackConfigSourceInterceptor extends FallbackConfigSou
         CLIENT_PROPERTIES.put("key-store", "keyStore");
         CLIENT_PROPERTIES.put("key-store-password", "keyStorePassword");
         CLIENT_PROPERTIES.put("key-store-type", "keyStoreType");
+        CLIENT_PROPERTIES.put("tls-configuration-name", "tlsConfigurationName");
         CLIENT_PROPERTIES.put("follow-redirects", "followRedirects");
         CLIENT_PROPERTIES.put("proxy-address", "proxyAddress");
         CLIENT_PROPERTIES.put("query-param-style", "queryParamStyle");
@@ -47,8 +48,6 @@ public class RestClientFallbackConfigSourceInterceptor extends FallbackConfigSou
         GLOBAL_PROPERTIES = new HashMap<>();
         GLOBAL_PROPERTIES.put("quarkus.rest-client.multipart-post-encoder-mode",
                 "quarkus.rest.client.multipart-post-encoder-mode");
-        GLOBAL_PROPERTIES.put("quarkus.rest-client.disable-smart-produces",
-                "quarkus.rest-client-reactive.disable-smart-produces");
 
         GLOBAL_PROPERTIES_INVERSE = inverseMap(GLOBAL_PROPERTIES);
     }

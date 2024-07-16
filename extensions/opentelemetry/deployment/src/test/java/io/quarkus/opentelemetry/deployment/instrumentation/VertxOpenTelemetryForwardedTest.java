@@ -1,7 +1,7 @@
 package io.quarkus.opentelemetry.deployment.instrumentation;
 
 import static io.opentelemetry.api.trace.SpanKind.SERVER;
-import static io.opentelemetry.semconv.SemanticAttributes.HTTP_CLIENT_IP;
+import static io.opentelemetry.semconv.ClientAttributes.CLIENT_ADDRESS;
 import static io.quarkus.opentelemetry.deployment.common.SemconvResolver.assertSemanticAttribute;
 import static io.quarkus.opentelemetry.deployment.common.TestSpanExporter.getSpanByKindAndParentId;
 import static org.hamcrest.Matchers.is;
@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import io.opentelemetry.sdk.trace.data.SpanData;
+import io.quarkus.opentelemetry.deployment.common.InMemoryMetricExporter;
+import io.quarkus.opentelemetry.deployment.common.InMemoryMetricExporterProvider;
 import io.quarkus.opentelemetry.deployment.common.SemconvResolver;
 import io.quarkus.opentelemetry.deployment.common.TestSpanExporter;
 import io.quarkus.opentelemetry.deployment.common.TestSpanExporterProvider;
@@ -28,8 +30,11 @@ public class VertxOpenTelemetryForwardedTest {
             .withApplicationRoot((jar) -> jar
                     .addClass(TracerRouter.class)
                     .addClasses(TestSpanExporter.class, TestSpanExporterProvider.class, SemconvResolver.class)
+                    .addClasses(InMemoryMetricExporter.class, InMemoryMetricExporterProvider.class)
                     .addAsResource(new StringAsset(TestSpanExporterProvider.class.getCanonicalName()),
-                            "META-INF/services/io.opentelemetry.sdk.autoconfigure.spi.traces.ConfigurableSpanExporterProvider"))
+                            "META-INF/services/io.opentelemetry.sdk.autoconfigure.spi.traces.ConfigurableSpanExporterProvider")
+                    .addAsResource(new StringAsset(InMemoryMetricExporterProvider.class.getCanonicalName()),
+                            "META-INF/services/io.opentelemetry.sdk.autoconfigure.spi.metrics.ConfigurableMetricExporterProvider"))
             .withConfigurationResource("application-default.properties");
 
     @Inject
@@ -45,6 +50,6 @@ public class VertxOpenTelemetryForwardedTest {
         List<SpanData> spans = testSpanExporter.getFinishedSpanItems(2);
 
         SpanData server = getSpanByKindAndParentId(spans, SERVER, "0000000000000000");
-        assertSemanticAttribute(server, "192.0.2.60", HTTP_CLIENT_IP);
+        assertSemanticAttribute(server, "192.0.2.60", CLIENT_ADDRESS);
     }
 }

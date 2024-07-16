@@ -22,11 +22,12 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
     private List<String> acceptedValues;
     private boolean optional;
     private boolean list;
-    private boolean passThroughMap;
     private boolean withinAConfigGroup;
     // if a key is "quarkus.kubernetes.part-of", then the value of this would be "kubernetes"
     private String topLevelGrouping;
     private boolean isEnum;
+    private String since;
+    private String environmentVariable;
 
     public ConfigDocKey() {
     }
@@ -130,7 +131,7 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
         return withinAMap;
     }
 
-    String computeTypeSimpleName() {
+    public String computeTypeSimpleName() {
         String unwrappedType = DocGeneratorUtil.unbox(type);
 
         Matcher matcher = Constants.CLASS_NAME_PATTERN.matcher(unwrappedType);
@@ -165,14 +166,6 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
         this.docMapKey = docMapKey;
     }
 
-    public boolean isPassThroughMap() {
-        return passThroughMap;
-    }
-
-    public void setPassThroughMap(boolean passThroughMap) {
-        this.passThroughMap = passThroughMap;
-    }
-
     public boolean isWithinAConfigGroup() {
         return withinAConfigGroup;
     }
@@ -191,6 +184,22 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
 
     public void setEnum(boolean anEnum) {
         isEnum = anEnum;
+    }
+
+    public String getSince() {
+        return since;
+    }
+
+    public void setSince(String since) {
+        this.since = since;
+    }
+
+    public String getEnvironmentVariable() {
+        return environmentVariable;
+    }
+
+    public void setEnvironmentVariable(String environmentVariable) {
+        this.environmentVariable = environmentVariable;
     }
 
     @Override
@@ -213,7 +222,6 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
         return withinAMap == that.withinAMap &&
                 optional == that.optional &&
                 list == that.list &&
-                passThroughMap == that.passThroughMap &&
                 withinAConfigGroup == that.withinAConfigGroup &&
                 Objects.equals(type, that.type) &&
                 Objects.equals(key, that.key) &&
@@ -229,7 +237,7 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
     @Override
     public int hashCode() {
         return Objects.hash(type, key, configDoc, withinAMap, defaultValue, javaDocSiteLink, docMapKey, configPhase,
-                acceptedValues, optional, list, passThroughMap, withinAConfigGroup, topLevelGrouping);
+                acceptedValues, optional, list, withinAConfigGroup, topLevelGrouping);
     }
 
     @Override
@@ -246,7 +254,6 @@ final public class ConfigDocKey implements ConfigDocElement, Comparable<ConfigDo
                 ", acceptedValues=" + acceptedValues +
                 ", optional=" + optional +
                 ", list=" + list +
-                ", passThroughMap=" + passThroughMap +
                 ", withinAConfigGroup=" + withinAConfigGroup +
                 ", topLevelGrouping='" + topLevelGrouping + '\'' +
                 '}';

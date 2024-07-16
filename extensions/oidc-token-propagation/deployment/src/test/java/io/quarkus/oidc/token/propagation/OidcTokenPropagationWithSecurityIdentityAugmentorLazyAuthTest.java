@@ -10,11 +10,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import io.quarkus.test.QuarkusUnitTest;
-import io.quarkus.test.common.QuarkusTestResource;
+import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.oidc.server.OidcWiremockTestResource;
 import io.restassured.RestAssured;
 
-@QuarkusTestResource(OidcWiremockTestResource.class)
+@WithTestResource(value = OidcWiremockTestResource.class, restrictToAnnotatedClass = false)
 public class OidcTokenPropagationWithSecurityIdentityAugmentorLazyAuthTest {
 
     private static Class<?>[] testClasses = {
@@ -31,9 +31,11 @@ public class OidcTokenPropagationWithSecurityIdentityAugmentorLazyAuthTest {
             .withApplicationRoot((jar) -> jar
                     .addClasses(testClasses)
                     .addAsResource("application.properties")
-                    .addAsResource(new StringAsset("quarkus.oidc-token-propagation.enabled-during-authentication=true\n" +
-                            "quarkus.rest-client.\"roles\".uri=http://localhost:8081/roles\n" +
-                            "quarkus.http.auth.proactive=false\n"),
+                    .addAsResource(
+                            new StringAsset(
+                                    "quarkus.resteasy-client-oidc-token-propagation.enabled-during-authentication=true\n" +
+                                            "quarkus.rest-client.\"roles\".uri=http://localhost:8081/roles\n" +
+                                            "quarkus.http.auth.proactive=false\n"),
                             "META-INF/microprofile-config.properties"));
 
     @Test

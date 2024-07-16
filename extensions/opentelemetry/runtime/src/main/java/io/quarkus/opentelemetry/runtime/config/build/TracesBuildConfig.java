@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.smallrye.config.WithDefault;
+import io.smallrye.config.WithName;
 
 /**
  * Tracing build time configuration
@@ -53,7 +54,13 @@ public interface TracesBuildConfig {
     String sampler();
 
     /**
-     * EndUser SpanProcessor configurations.
+     * If OpenTelemetry End User attributes should be added as Span attributes on a best-efforts basis.
+     *
+     * @see <a href="https://opentelemetry.io/docs/specs/semconv/attributes-registry/enduser/">OpenTelemetry End User
+     *      attributes</a>
      */
-    EndUserSpanProcessorConfig eusp();
+    @WithName("eusp.enabled")
+    @WithDefault("false")
+    boolean addEndUserAttributes();
+
 }

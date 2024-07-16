@@ -198,7 +198,7 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
         if (!enabled) {
             LOGGER.info("Quartz scheduler is disabled by config property and will not be started");
             this.scheduler = null;
-        } else if (!forceStart && context.getScheduledMethods().isEmpty()) {
+        } else if (!forceStart && context.getScheduledMethods().isEmpty() && !context.forceSchedulerStart()) {
             LOGGER.info("No scheduled business methods found - Quartz scheduler will not be started");
             this.scheduler = null;
         } else {
@@ -564,8 +564,9 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
 
         props.put("org.quartz.scheduler.skipUpdateCheck", "true");
         props.put(StdSchedulerFactory.PROP_SCHED_INSTANCE_NAME, runtimeConfig.instanceName);
-        props.put(StdSchedulerFactory.PROP_SCHED_BATCH_TIME_WINDOW, runtimeConfig.batchTriggerAcquisitionFireAheadTimeWindow);
-        props.put(StdSchedulerFactory.PROP_SCHED_MAX_BATCH_SIZE, runtimeConfig.batchTriggerAcquisitionMaxCount);
+        props.put(StdSchedulerFactory.PROP_SCHED_BATCH_TIME_WINDOW,
+                "" + runtimeConfig.batchTriggerAcquisitionFireAheadTimeWindow);
+        props.put(StdSchedulerFactory.PROP_SCHED_MAX_BATCH_SIZE, "" + runtimeConfig.batchTriggerAcquisitionMaxCount);
         props.put(StdSchedulerFactory.PROP_SCHED_WRAP_JOB_IN_USER_TX, "false");
         props.put(StdSchedulerFactory.PROP_SCHED_SCHEDULER_THREADS_INHERIT_CONTEXT_CLASS_LOADER_OF_INITIALIZING_THREAD, "true");
         props.put(StdSchedulerFactory.PROP_THREAD_POOL_CLASS, "org.quartz.simpl.SimpleThreadPool");
@@ -978,7 +979,7 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
             if (executionMetadata.taskClass() != null) {
                 jobBuilder.usingJobData(EXECUTION_METADATA_TASK_CLASS, executionMetadata.taskClass().getName());
             } else if (executionMetadata.asyncTaskClass() != null) {
-                jobBuilder.usingJobData(EXECUTION_METADATA_TASK_CLASS, executionMetadata.asyncTaskClass().getName());
+                jobBuilder.usingJobData(EXECUTION_METADATA_ASYNC_TASK_CLASS, executionMetadata.asyncTaskClass().getName());
             }
             if (executionMetadata.skipPredicateClass() != null) {
                 jobBuilder.usingJobData(EXECUTION_METADATA_SKIP_PREDICATE_CLASS,
@@ -1127,12 +1128,12 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
 
     static class QuartzTrigger implements Trigger {
 
-        final org.quartz.TriggerKey triggerKey;
-        final Function<TriggerKey, org.quartz.Trigger> triggerFunction;
-        final ScheduledInvoker invoker;
-        final Duration gracePeriod;
-        final boolean isProgrammatic;
-        final String methodDescription;
+        private final org.quartz.TriggerKey triggerKey;
+        private final Function<TriggerKey, org.quartz.Trigger> triggerFunction;
+        private final ScheduledInvoker invoker;
+        private final Duration gracePeriod;
+        private final boolean isProgrammatic;
+        private final String methodDescription;
 
         final boolean runBlockingMethodOnQuartzThread;
 
@@ -1150,13 +1151,13 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
 
         @Override
         public Instant getNextFireTime() {
-            Date nextFireTime = getTrigger().getNextFireTime();
+            Date nextFireTime = trigger().getNextFireTime();
             return nextFireTime != null ? nextFireTime.toInstant() : null;
         }
 
         @Override
         public Instant getPreviousFireTime() {
-            Date previousFireTime = getTrigger().getPreviousFireTime();
+            Date previousFireTime = trigger().getPreviousFireTime();
             return previousFireTime != null ? previousFireTime.toInstant() : null;
         }
 
@@ -1172,16 +1173,16 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
 
         @Override
         public String getId() {
-            return getTrigger().getKey().getName();
-        }
-
-        private org.quartz.Trigger getTrigger() {
-            return triggerFunction.apply(triggerKey);
+            return trigger().getKey().getName();
         }
 
         @Override
         public String getMethodDescription() {
             return methodDescription;
+        }
+
+        private org.quartz.Trigger trigger() {
+            return triggerFunction.apply(triggerKey);
         }
 
     }
@@ -1242,10 +1243,10 @@ public class QuartzSchedulerImpl implements QuartzScheduler {
                 // Get the original class from an intercepted bean class
                 jobClass = (Class<? extends Job>) jobClass.getSuperclass();
             }
-            Instance<?> instance = jobs.select(jobClass);
+            Instance<? extends Job> instance = jobs.select(jobClass);
             if (instance.isResolvable()) {
                 // This is a job backed by a CDI bean
-                return jobWithSpanWrapper((Job) instance.get());
+                return jobWithSpanWrapper(new CdiAwareJob(instance));
             }
             // Instantiate a plain job class
             return jobWithSpanWrapper(super.newJob(bundle, Scheduler));

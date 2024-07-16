@@ -1,14 +1,16 @@
 import { QwcHotReloadElement, html, css } from 'qwc-hot-reload-element';
 import { devServices } from 'devui-data';
+import { observeState } from 'lit-element-state';
+import { themeState } from 'theme-state';
 import '@vaadin/icon';
-import 'qui-code-block';
-import 'qui-card';
+import '@qomponent/qui-code-block';
+import '@qomponent/qui-card';
 import 'qwc-no-data';
 
 /**
  * This component shows the Dev Services Page
  */
-export class QwcDevServices extends QwcHotReloadElement {
+export class QwcDevServices extends observeState(QwcHotReloadElement) {
     static styles = css`
         .cards {
             height: 100%;
@@ -68,7 +70,7 @@ export class QwcDevServices extends QwcHotReloadElement {
     }
 
     _renderCard(devService){
-        return html`<qui-card title="${devService.name}">
+        return html`<qui-card header="${devService.name}">
                         <div slot="content">
                             ${this._renderContainerDetails(devService)}
                             ${this._renderConfigDetails(devService)}
@@ -100,6 +102,7 @@ export class QwcDevServices extends QwcHotReloadElement {
                         <div class="config">
                             <qui-code-block 
                                 mode='properties'
+                                theme='${themeState.theme.name}'    
                                 content='${properties.trim()}'>
                             </qui-code-block>
                         </div>`;

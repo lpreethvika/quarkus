@@ -20,6 +20,7 @@ import io.quarkus.oidc.client.Tokens;
 import io.quarkus.oidc.common.OidcEndpoint;
 import io.quarkus.oidc.common.OidcRequestContextProperties;
 import io.quarkus.oidc.common.OidcRequestFilter;
+import io.quarkus.oidc.common.runtime.OidcCommonConfig.Credentials.Jwt.Source;
 import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.smallrye.mutiny.Uni;
@@ -36,7 +37,8 @@ import io.vertx.mutiny.ext.web.client.WebClient;
 public class OidcClientImpl implements OidcClient {
 
     private static final Logger LOG = Logger.getLogger(OidcClientImpl.class);
-
+    private static final String CLIENT_ID_ATTRIBUTE = "client-id";
+    private static final String DEFAULT_OIDC_CLIENT_ID = "Default";
     private static final String AUTHORIZATION_HEADER = String.valueOf(HttpHeaders.AUTHORIZATION);
 
     private final WebClient client;
@@ -47,6 +49,7 @@ public class OidcClientImpl implements OidcClient {
     private final String grantType;
     private final String clientSecretBasicAuthScheme;
     private final Key clientJwtKey;
+    private final boolean jwtBearerAuthentication;
     private final OidcClientConfig oidcConfig;
     private final Map<OidcEndpoint.Type, List<OidcRequestFilter>> filters;
     private volatile boolean closed;
@@ -63,7 +66,8 @@ public class OidcClientImpl implements OidcClient {
         this.oidcConfig = oidcClientConfig;
         this.filters = filters;
         this.clientSecretBasicAuthScheme = OidcCommonUtils.initClientSecretBasicAuth(oidcClientConfig);
-        this.clientJwtKey = OidcCommonUtils.initClientJwtKey(oidcClientConfig);
+        this.jwtBearerAuthentication = oidcClientConfig.credentials.jwt.source == Source.BEARER;
+        this.clientJwtKey = jwtBearerAuthentication ? null : OidcCommonUtils.initClientJwtKey(oidcClientConfig);
     }
 
     @Override
@@ -141,8 +145,18 @@ public class OidcClientImpl implements OidcClient {
                 request.putHeader(headerEntry.getKey(), headerEntry.getValue());
             }
         }
+
         if (clientSecretBasicAuthScheme != null) {
             request.putHeader(AUTHORIZATION_HEADER, clientSecretBasicAuthScheme);
+        } else if (jwtBearerAuthentication) {
+            if (!additionalGrantParameters.containsKey(OidcConstants.CLIENT_ASSERTION)) {
+                String errorMessage = String.format(
+                        "%s OidcClient can not complete the %s grant request because a JWT bearer client_assertion is missing",
+                        oidcConfig.getId().get(), (refresh ? OidcConstants.REFRESH_TOKEN_GRANT : grantType));
+                LOG.error(errorMessage);
+                throw new OidcClientException(errorMessage);
+            }
+            body.add(OidcConstants.CLIENT_ASSERTION_TYPE, OidcConstants.JWT_BEARER_CLIENT_ASSERTION_TYPE);
         } else if (clientJwtKey != null) {
             // if it is a refresh then a map has already been copied
             body = !refresh ? copyMultiMap(body) : body;
@@ -151,6 +165,16 @@ public class OidcClientImpl implements OidcClient {
             if (OidcCommonUtils.isClientSecretPostJwtAuthRequired(oidcConfig.credentials)) {
                 body.add(OidcConstants.CLIENT_ID, oidcConfig.clientId.get());
                 body.add(OidcConstants.CLIENT_SECRET, jwt);
+            } else if (OidcCommonUtils.isJwtAssertion(oidcConfig.credentials)) {
+                if (!OidcConstants.JWT_BEARER_GRANT_TYPE.equals(body.get(OidcConstants.GRANT_TYPE))) {
+                    String errorMessage = String.format(
+                            "%s OidcClient wants to use JWT bearer grant assertion but has a wrong grant type %s configured."
+                                    + " You must set 'quarkus.oidc-client.grant.type' property to 'jwt'.",
+                            oidcConfig.getId().get(), body.get(OidcConstants.GRANT_TYPE));
+                    LOG.error(errorMessage);
+                    throw new OidcClientException(errorMessage);
+                }
+                body.add(OidcConstants.JWT_BEARER_GRANT_ASSERTION, jwt);
             } else {
                 body.add(OidcConstants.CLIENT_ASSERTION_TYPE, OidcConstants.JWT_BEARER_CLIENT_ASSERTION_TYPE);
                 body.add(OidcConstants.CLIENT_ASSERTION, jwt);
@@ -196,7 +220,7 @@ public class OidcClientImpl implements OidcClient {
                     json.getValue(oidcConfig.grant.refreshExpiresInProperty));
 
             return new Tokens(accessToken, accessTokenExpiresAt, oidcConfig.refreshTokenTimeSkew.orElse(null), refreshToken,
-                    refreshTokenExpiresAt, json);
+                    refreshTokenExpiresAt, json, oidcConfig.clientId.orElse(DEFAULT_OIDC_CLIENT_ID));
         } else {
             String errorMessage = resp.bodyAsString();
             LOG.debugf("%s OidcClient has failed to complete the %s grant request:  status: %d, error message: %s",
@@ -267,7 +291,8 @@ public class OidcClientImpl implements OidcClient {
 
     private HttpRequest<Buffer> filter(OidcEndpoint.Type endpointType, HttpRequest<Buffer> request, Buffer body) {
         if (!filters.isEmpty()) {
-            OidcRequestContextProperties props = new OidcRequestContextProperties();
+            OidcRequestContextProperties props = new OidcRequestContextProperties(
+                    Map.of(CLIENT_ID_ATTRIBUTE, oidcConfig.getId().orElse(DEFAULT_OIDC_CLIENT_ID)));
             for (OidcRequestFilter filter : OidcCommonUtils.getMatchingOidcRequestFilters(filters, endpointType)) {
                 filter.filter(request, body, props);
             }

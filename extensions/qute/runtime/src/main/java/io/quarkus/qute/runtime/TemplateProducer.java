@@ -4,6 +4,7 @@ import java.lang.annotation.Annotation;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -18,6 +19,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.Produces;
 import jakarta.enterprise.inject.spi.AnnotatedParameter;
 import jakarta.enterprise.inject.spi.InjectionPoint;
@@ -30,9 +32,12 @@ import io.quarkus.qute.Engine;
 import io.quarkus.qute.Expression;
 import io.quarkus.qute.Location;
 import io.quarkus.qute.ParameterDeclaration;
+import io.quarkus.qute.RenderedResults;
+import io.quarkus.qute.ResultsCollectingTemplateInstance;
 import io.quarkus.qute.Template;
 import io.quarkus.qute.TemplateInstance;
 import io.quarkus.qute.TemplateInstanceBase;
+import io.quarkus.qute.TemplateNode;
 import io.quarkus.qute.Variant;
 import io.quarkus.qute.runtime.QuteRecorder.QuteContext;
 import io.quarkus.runtime.LaunchMode;
@@ -51,7 +56,10 @@ public class TemplateProducer {
     // In the dev mode, we need to keep track of injected templates so that we can clear the cached values
     private final List<WeakReference<InjectableTemplate>> injectedTemplates;
 
-    TemplateProducer(Engine engine, QuteContext context, ContentTypes contentTypes, LaunchMode launchMode) {
+    private final RenderedResults renderedResults;
+
+    TemplateProducer(Engine engine, QuteContext context, ContentTypes contentTypes, LaunchMode launchMode,
+            Instance<RenderedResults> renderedResults) {
         this.engine = engine;
         Map<String, TemplateVariants> templateVariants = new HashMap<>();
         for (Entry<String, List<String>> entry : context.getVariants().entrySet()) {
@@ -60,6 +68,7 @@ public class TemplateProducer {
             templateVariants.put(entry.getKey(), var);
         }
         this.templateVariants = Collections.unmodifiableMap(templateVariants);
+        this.renderedResults = launchMode == LaunchMode.TEST ? renderedResults.get() : null;
         this.injectedTemplates = launchMode == LaunchMode.DEVELOPMENT ? Collections.synchronizedList(new ArrayList<>()) : null;
         LOGGER.debugf("Initializing Qute variant templates: %s", templateVariants);
     }
@@ -122,7 +131,7 @@ public class TemplateProducer {
     }
 
     private Template newInjectableTemplate(String path) {
-        InjectableTemplate template = new InjectableTemplate(path, templateVariants, engine);
+        InjectableTemplate template = new InjectableTemplate(path, templateVariants, engine, renderedResults);
         if (injectedTemplates != null) {
             injectedTemplates.add(new WeakReference<>(template));
         }
@@ -142,8 +151,10 @@ public class TemplateProducer {
         private final Engine engine;
         // Some methods may only work if a single template variant is found
         private final LazyValue<Template> unambiguousTemplate;
+        private final RenderedResults renderedResults;
 
-        public InjectableTemplate(String path, Map<String, TemplateVariants> templateVariants, Engine engine) {
+        InjectableTemplate(String path, Map<String, TemplateVariants> templateVariants, Engine engine,
+                RenderedResults renderedResults) {
             this.path = path;
             this.variants = templateVariants.get(path);
             this.engine = engine;
@@ -158,11 +169,13 @@ public class TemplateProducer {
             } else {
                 unambiguousTemplate = null;
             }
+            this.renderedResults = renderedResults;
         }
 
         @Override
         public TemplateInstance instance() {
-            return new InjectableTemplateInstanceImpl();
+            TemplateInstance instance = new InjectableTemplateInstanceImpl();
+            return renderedResults != null ? new ResultsCollectingTemplateInstance(instance, renderedResults) : instance;
         }
 
         @Override
@@ -224,6 +237,22 @@ public class TemplateProducer {
                 return unambiguousTemplate.get().getFragmentIds();
             }
             throw ambiguousTemplates("getFragmentIds()");
+        }
+
+        @Override
+        public List<TemplateNode> getNodes() {
+            if (unambiguousTemplate != null) {
+                return unambiguousTemplate.get().getNodes();
+            }
+            throw ambiguousTemplates("getNodes()");
+        }
+
+        @Override
+        public Collection<TemplateNode> findNodes(Predicate<TemplateNode> predicate) {
+            if (unambiguousTemplate != null) {
+                return unambiguousTemplate.get().findNodes(predicate);
+            }
+            throw ambiguousTemplates("findNodes()");
         }
 
         private UnsupportedOperationException ambiguousTemplates(String method) {
@@ -289,8 +318,19 @@ public class TemplateProducer {
             }
 
             @Override
+            public List<TemplateNode> getNodes() {
+                return InjectableTemplate.this.getNodes();
+            }
+
+            @Override
+            public Collection<TemplateNode> findNodes(Predicate<TemplateNode> predicate) {
+                return InjectableTemplate.this.findNodes(predicate);
+            }
+
+            @Override
             public TemplateInstance instance() {
-                return new InjectableFragmentTemplateInstanceImpl(identifier);
+                TemplateInstance instance = new InjectableFragmentTemplateInstanceImpl(identifier);
+                return renderedResults != null ? new ResultsCollectingTemplateInstance(instance, renderedResults) : instance;
             }
 
         }
@@ -341,7 +381,8 @@ public class TemplateProducer {
             private TemplateInstance templateInstance() {
                 TemplateInstance instance = template().instance();
                 if (dataMap != null) {
-                    dataMap.forEach(instance::data);
+                    dataMap.forEachData(instance::data);
+                    dataMap.forEachComputedData(instance::computedData);
                 } else if (data != null) {
                     instance.data(data);
                 }

@@ -22,6 +22,14 @@ public class TestNativeConfig implements NativeConfig {
         this.builderImage = new TestBuildImageConfig(builderImage, builderImagePull);
     }
 
+    public boolean enabled() {
+        return true;
+    }
+
+    public boolean sourcesOnly() {
+        return true;
+    }
+
     @Override
     public Optional<List<String>> additionalBuildArgs() {
         return Optional.empty();
@@ -143,6 +151,11 @@ public class TestNativeConfig implements NativeConfig {
     }
 
     @Override
+    public Optional<String> march() {
+        return Optional.empty();
+    }
+
+    @Override
     public boolean remoteContainerBuild() {
         return false;
     }
@@ -215,6 +228,11 @@ public class TestNativeConfig implements NativeConfig {
     @Override
     public Compression compression() {
         return null;
+    }
+
+    @Override
+    public boolean agentConfigurationApply() {
+        return false;
     }
 
     private class TestBuildImageConfig implements BuilderImageConfig {

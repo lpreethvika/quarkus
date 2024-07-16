@@ -159,7 +159,7 @@ public class RabbitMQDevServicesProcessor {
         }
 
         // Check if rabbitmq-port or rabbitmq-host are set
-        if (ConfigUtils.isPropertyPresent(RABBITMQ_HOST_PROP) || ConfigUtils.isPropertyPresent(RABBITMQ_PORT_PROP)) {
+        if (ConfigUtils.isPropertyNonEmpty(RABBITMQ_HOST_PROP) || ConfigUtils.isPropertyNonEmpty(RABBITMQ_PORT_PROP)) {
             log.debug("Not starting Dev Services for RabbitMQ, the rabbitmq-host and/or rabbitmq-port are configured.");
             return null;
         }
@@ -215,7 +215,7 @@ public class RabbitMQDevServicesProcessor {
         configMap.put(RABBITMQ_HTTP_PORT_PROP, String.valueOf(httpPort));
         configMap.put(RABBITMQ_USERNAME_PROP, username);
         configMap.put(RABBITMQ_PASSWORD_PROP, password);
-        return new RunningDevService(Feature.SMALLRYE_REACTIVE_MESSAGING_RABBITMQ.getName(),
+        return new RunningDevService(Feature.MESSAGING_RABBITMQ.getName(),
                 containerId, closeable, configMap);
     }
 
@@ -229,8 +229,8 @@ public class RabbitMQDevServicesProcessor {
             if ((isIncoming || isOutgoing) && isConnector) {
                 String connectorValue = config.getValue(name, String.class);
                 boolean isRabbitMQ = connectorValue.equalsIgnoreCase("smallrye-rabbitmq");
-                boolean hasHost = ConfigUtils.isPropertyPresent(name.replace(".connector", ".host"));
-                boolean hasPort = ConfigUtils.isPropertyPresent(name.replace(".connector", ".port"));
+                boolean hasHost = ConfigUtils.isPropertyNonEmpty(name.replace(".connector", ".host"));
+                boolean hasPort = ConfigUtils.isPropertyNonEmpty(name.replace(".connector", ".port"));
                 isConfigured = isRabbitMQ && (hasHost || hasPort);
             }
 

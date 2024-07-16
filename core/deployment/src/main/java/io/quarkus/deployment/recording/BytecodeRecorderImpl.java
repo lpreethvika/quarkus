@@ -1200,6 +1200,7 @@ public class BytecodeRecorderImpl implements RecorderContext {
 
         Set<String> handledProperties = new HashSet<>();
         Property[] desc = PropertyUtils.getPropertyDescriptors(param);
+        FieldsHelper fieldsHelper = new FieldsHelper(param.getClass());
         for (Property i : desc) {
             if (!i.getDeclaringClass().getPackageName().startsWith("java.")) {
                 // check if the getter is ignored
@@ -1207,13 +1208,9 @@ public class BytecodeRecorderImpl implements RecorderContext {
                     continue;
                 }
                 // check if the matching field is ignored
-                try {
-                    Field field = param.getClass().getDeclaredField(i.getName());
-                    if (ignoreField(field)) {
-                        continue;
-                    }
-                } catch (NoSuchFieldException ignored) {
-
+                Field field = fieldsHelper.getDeclaredField(i.getName());
+                if (field != null && ignoreField(field)) {
+                    continue;
                 }
             }
             Integer ctorParamIndex = constructorParamNameMap.remove(i.name);
@@ -1238,9 +1235,16 @@ public class BytecodeRecorderImpl implements RecorderContext {
                                 public void handle(MethodContext context, MethodCreator method,
                                         DeferredArrayStoreParameter out) {
                                     //get the collection
-                                    ResultHandle prop = method.invokeVirtualMethod(
-                                            MethodDescriptor.ofMethod(i.getReadMethod()),
-                                            context.loadDeferred(out));
+                                    ResultHandle prop;
+                                    if (i.getReadMethod().isDefault()) {
+                                        prop = method.invokeInterfaceMethod(
+                                                MethodDescriptor.ofMethod(i.getReadMethod()),
+                                                context.loadDeferred(out));
+                                    } else {
+                                        prop = method.invokeVirtualMethod(
+                                                MethodDescriptor.ofMethod(i.getReadMethod()),
+                                                context.loadDeferred(out));
+                                    }
                                     for (DeferredParameter i : params) {
                                         //add the parameter
                                         //TODO: this is not guarded against large collections, probably not an issue in practice

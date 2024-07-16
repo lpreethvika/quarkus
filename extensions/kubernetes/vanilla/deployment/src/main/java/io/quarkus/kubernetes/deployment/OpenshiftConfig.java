@@ -1,19 +1,8 @@
 
 package io.quarkus.kubernetes.deployment;
 
-import static io.quarkus.kubernetes.deployment.Constants.BATCH_GROUP;
-import static io.quarkus.kubernetes.deployment.Constants.BATCH_VERSION;
-import static io.quarkus.kubernetes.deployment.Constants.CRONJOB;
-import static io.quarkus.kubernetes.deployment.Constants.DEPLOYMENT;
-import static io.quarkus.kubernetes.deployment.Constants.DEPLOYMENT_CONFIG;
-import static io.quarkus.kubernetes.deployment.Constants.DEPLOYMENT_CONFIG_GROUP;
-import static io.quarkus.kubernetes.deployment.Constants.DEPLOYMENT_CONFIG_VERSION;
-import static io.quarkus.kubernetes.deployment.Constants.DEPLOYMENT_GROUP;
-import static io.quarkus.kubernetes.deployment.Constants.DEPLOYMENT_VERSION;
-import static io.quarkus.kubernetes.deployment.Constants.JOB;
 import static io.quarkus.kubernetes.deployment.Constants.OPENSHIFT;
 import static io.quarkus.kubernetes.deployment.Constants.S2I;
-import static io.quarkus.kubernetes.deployment.Constants.STATEFULSET;
 
 import java.util.Collections;
 import java.util.List;
@@ -28,6 +17,7 @@ import io.quarkus.container.image.deployment.ContainerImageConfig;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.kubernetes.spi.DeployStrategy;
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigItem;
 import io.quarkus.runtime.annotations.ConfigRoot;
 
@@ -37,25 +27,6 @@ public class OpenshiftConfig implements PlatformConfiguration {
     public static enum OpenshiftFlavor {
         v3,
         v4;
-    }
-
-    public static enum DeploymentResourceKind {
-        Deployment(DEPLOYMENT, DEPLOYMENT_GROUP, DEPLOYMENT_VERSION),
-        @Deprecated(since = "OpenShift 4.14")
-        DeploymentConfig(DEPLOYMENT_CONFIG, DEPLOYMENT_CONFIG_GROUP, DEPLOYMENT_CONFIG_VERSION),
-        StatefulSet(STATEFULSET, DEPLOYMENT_GROUP, DEPLOYMENT_VERSION),
-        Job(JOB, BATCH_GROUP, BATCH_VERSION),
-        CronJob(CRONJOB, BATCH_GROUP, BATCH_VERSION);
-
-        public final String kind;
-        public final String apiGroup;
-        public final String apiVersion;
-
-        DeploymentResourceKind(String kind, String apiGroup, String apiVersion) {
-            this.kind = kind;
-            this.apiGroup = apiGroup;
-            this.apiVersion = apiVersion;
-        }
     }
 
     /**
@@ -110,12 +81,14 @@ public class OpenshiftConfig implements PlatformConfiguration {
      * Custom labels to add to all resources
      */
     @ConfigItem
+    @ConfigDocMapKey("label-name")
     Map<String, String> labels;
 
     /**
      * Custom annotations to add to all resources
      */
     @ConfigItem
+    @ConfigDocMapKey("annotation-name")
     Map<String, String> annotations;
 
     /**
@@ -617,6 +590,12 @@ public class OpenshiftConfig implements PlatformConfiguration {
     @ConfigItem(defaultValue = "false")
     boolean idempotent;
 
+    /**
+     * VCS URI annotation configuration.
+     */
+    @ConfigItem
+    VCSUriConfig vcsUri;
+
     public Optional<String> getAppSecret() {
         return this.appSecret;
     }
@@ -633,6 +612,11 @@ public class OpenshiftConfig implements PlatformConfiguration {
     @Override
     public boolean isIdempotent() {
         return idempotent;
+    }
+
+    @Override
+    public VCSUriConfig getVCSUri() {
+        return vcsUri;
     }
 
     public DeployStrategy getDeployStrategy() {
@@ -652,11 +636,10 @@ public class OpenshiftConfig implements PlatformConfiguration {
 
     public DeploymentResourceKind getDeploymentResourceKind(Capabilities capabilities) {
         if (deploymentKind.isPresent()) {
-            return deploymentKind.get();
+            return deploymentKind.filter(k -> k.isAvailalbleOn(OPENSHIFT)).get();
         } else if (capabilities.isPresent(Capability.PICOCLI)) {
             return DeploymentResourceKind.Job;
         }
-
         return (flavor == OpenshiftFlavor.v3) ? DeploymentResourceKind.DeploymentConfig : DeploymentResourceKind.Deployment;
     }
 }

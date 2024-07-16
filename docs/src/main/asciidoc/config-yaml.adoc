@@ -79,7 +79,8 @@ quarkus:
 ----
 quarkus:
   datasource:
-    url: jdbc:postgresql://localhost:5432/quarkus_test
+    jdbc:
+      url: jdbc:postgresql://localhost:5432/quarkus_test
 
   hibernate-orm:
     database:
@@ -112,7 +113,7 @@ app:
 
 == Profiles
 
-As you can see in the previous snippet, you can use xref:{doc-guides}/config-reference.adoc#profiles[profiles] in YAML.
+As you can see in the previous snippet, you can use xref:config-reference.adoc#profiles[profiles] in YAML.
 
 
 In YAML, keys that begin with `%` are not allowed.

@@ -1,19 +1,19 @@
 import { LitElement, html, css} from 'lit';
-import { basepath } from 'devui-data';
 import '@vaadin/progress-bar';
 import '@vaadin/grid';
 import { columnBodyRenderer } from '@vaadin/grid/lit.js';
 import '@vaadin/grid/vaadin-grid-sort-column.js';
+import { JsonRpc } from 'jsonrpc';
 
 /**
  * This component show all available endpoints
  */
 export class QwcEndpoints extends LitElement {
+    jsonRpc = new JsonRpc(this);
     
     static styles = css`
         .infogrid {
             width: 99%;
-            height: 99%;
         }
         a {
             cursor: pointer;
@@ -37,7 +37,7 @@ export class QwcEndpoints extends LitElement {
     `;
 
     static properties = {
-        _info: {state: true},
+        _info: {state: true}
     }
 
     constructor() {
@@ -45,25 +45,33 @@ export class QwcEndpoints extends LitElement {
         this._info = null;
     }
 
-    async connectedCallback() {
+    connectedCallback() {
         super.connectedCallback();
-        await this.load();
+        this.jsonRpc.getJsonContent().then(jsonRpcResponse => {
+            this._info = jsonRpcResponse.result;
+        });
     }
-        
-    async load() {
-        const response = await fetch(basepath + "/endpoints.json");
-        const data = await response.json();
-        this._info = data;
-    }
-
+    
     render() {
         if (this._info) {
-            const items = [];
-            for (const [key, value] of Object.entries(this._info)) {
-                items.push({"uri" : key, "description": value});
+            const typeTemplates = [];
+            for (const [type, list] of Object.entries(this._info)) {
+                typeTemplates.push(html`${this._renderType(type,list)}`);
             }
-            
-            return html`<vaadin-grid .items="${items}" class="infogrid">
+            return html`${typeTemplates}`;
+        }else{
+            return html`
+            <div style="color: var(--lumo-secondary-text-color);width: 95%;" >
+                <div>Fetching information...</div>
+                <vaadin-progress-bar indeterminate></vaadin-progress-bar>
+            </div>
+            `;
+        }
+    }
+
+    _renderType(type, items){
+        return html`<h3>${type}</h3>
+                    <vaadin-grid .items="${items}" class="infogrid" all-rows-visible>
                         <vaadin-grid-sort-column header='URL'
                                                 path="uri" 
                                             ${columnBodyRenderer(this._uriRenderer, [])}>
@@ -75,14 +83,6 @@ export class QwcEndpoints extends LitElement {
                                             ${columnBodyRenderer(this._descriptionRenderer, [])}>
                         </vaadin-grid-sort-column>
                     </vaadin-grid>`;
-        }else{
-            return html`
-            <div style="color: var(--lumo-secondary-text-color);width: 95%;" >
-                <div>Fetching information...</div>
-                <vaadin-progress-bar indeterminate></vaadin-progress-bar>
-            </div>
-            `;
-        }
     }
 
     _uriRenderer(endpoint) {

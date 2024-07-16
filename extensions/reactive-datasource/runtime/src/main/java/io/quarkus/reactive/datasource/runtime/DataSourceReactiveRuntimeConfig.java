@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 import io.quarkus.runtime.annotations.ConfigDocDefault;
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.vertx.core.runtime.config.JksConfiguration;
 import io.quarkus.vertx.core.runtime.config.PemKeyCertConfiguration;
@@ -111,9 +112,11 @@ public interface DataSourceReactiveRuntimeConfig {
 
     /**
      * The hostname verification algorithm to use in case the server's identity should be checked.
-     * Should be HTTPS, LDAPS or an empty string.
+     * Should be {@code HTTPS}, {@code LDAPS} or {@code NONE}.
+     * {@code NONE} is the default value and disables the verification.
      */
-    Optional<String> hostnameVerificationAlgorithm();
+    @WithDefault("NONE")
+    String hostnameVerificationAlgorithm();
 
     /**
      * The maximum time a connection remains unused in the pool before it is closed.
@@ -145,5 +148,6 @@ public interface DataSourceReactiveRuntimeConfig {
      * Other unspecified properties to be passed through the Reactive SQL Client directly to the database when new connections
      * are initiated.
      */
+    @ConfigDocMapKey("property-key")
     Map<String, String> additionalProperties();
 }

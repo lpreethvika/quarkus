@@ -2,19 +2,26 @@ package io.quarkus.oidc.token.propagation.reactive;
 
 import static io.quarkus.oidc.token.propagation.reactive.RolesSecurityIdentityAugmentor.SUPPORTED_USER;
 import static org.hamcrest.Matchers.equalTo;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.io.IOException;
 import java.util.Set;
 
+import org.htmlunit.SilentCssErrorHandler;
+import org.htmlunit.TextPage;
+import org.htmlunit.WebClient;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlPage;
 import org.jboss.shrinkwrap.api.asset.StringAsset;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import io.quarkus.test.QuarkusUnitTest;
-import io.quarkus.test.common.QuarkusTestResource;
+import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.oidc.server.OidcWiremockTestResource;
 import io.restassured.RestAssured;
 
-@QuarkusTestResource(OidcWiremockTestResource.class)
+@WithTestResource(value = OidcWiremockTestResource.class, restrictToAnnotatedClass = false)
 public class OidcTokenPropagationWithSecurityIdentityAugmentorTest {
 
     private static Class<?>[] testClasses = {
@@ -32,7 +39,7 @@ public class OidcTokenPropagationWithSecurityIdentityAugmentorTest {
                     .addClasses(testClasses)
                     .addAsResource("application.properties")
                     .addAsResource(
-                            new StringAsset("quarkus.oidc-token-propagation-reactive.enabled-during-authentication=true\n" +
+                            new StringAsset("quarkus.rest-client-oidc-token-propagation.enabled-during-authentication=true\n" +
                                     "quarkus.rest-client.\"roles\".uri=http://localhost:8081/roles\n"),
                             "META-INF/microprofile-config.properties"));
 
@@ -51,4 +58,25 @@ public class OidcTokenPropagationWithSecurityIdentityAugmentorTest {
         return OidcWiremockTestResource.getAccessToken(SUPPORTED_USER, Set.of("admin"));
     }
 
+    @Test
+    public void testGetUserNameWithTokenPropagationWithCodeFlow() throws IOException, InterruptedException {
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient.getPage("http://localhost:8081/frontend/token-propagation-with-augmentor");
+
+            HtmlForm form = page.getFormByName("form");
+            form.getInputByName("username").type("alice");
+            form.getInputByName("password").type("alice");
+
+            TextPage textPage = form.getInputByValue("login").click();
+
+            assertEquals("Token issued to alice has been exchanged, new user name: bob", textPage.getContent());
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
+    private WebClient createWebClient() {
+        WebClient webClient = new WebClient();
+        webClient.setCssErrorHandler(new SilentCssErrorHandler());
+        return webClient;
+    }
 }

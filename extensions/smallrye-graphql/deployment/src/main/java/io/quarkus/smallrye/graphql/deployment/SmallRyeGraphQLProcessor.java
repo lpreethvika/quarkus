@@ -1,5 +1,7 @@
 package io.quarkus.smallrye.graphql.deployment;
 
+import static io.smallrye.graphql.schema.helper.TypeAutoNameStrategy.valueOf;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -51,6 +53,7 @@ import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuil
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassConditionBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
 import io.quarkus.maven.dependency.GACT;
@@ -74,10 +77,12 @@ import io.quarkus.vertx.http.deployment.webjar.WebJarBuildItem;
 import io.quarkus.vertx.http.deployment.webjar.WebJarResourcesFilter;
 import io.quarkus.vertx.http.deployment.webjar.WebJarResultsBuildItem;
 import io.quarkus.vertx.http.runtime.HttpBuildTimeConfig;
+import io.smallrye.config.Converters;
 import io.smallrye.graphql.api.AdaptWith;
 import io.smallrye.graphql.api.Deprecated;
 import io.smallrye.graphql.api.Entry;
 import io.smallrye.graphql.api.ErrorExtensionProvider;
+import io.smallrye.graphql.api.OneOf;
 import io.smallrye.graphql.api.federation.ComposeDirective;
 import io.smallrye.graphql.api.federation.Extends;
 import io.smallrye.graphql.api.federation.External;
@@ -94,6 +99,7 @@ import io.smallrye.graphql.cdi.tracing.TracingService;
 import io.smallrye.graphql.config.ConfigKey;
 import io.smallrye.graphql.schema.Annotations;
 import io.smallrye.graphql.schema.SchemaBuilder;
+import io.smallrye.graphql.schema.helper.TypeAutoNameStrategy;
 import io.smallrye.graphql.schema.model.Argument;
 import io.smallrye.graphql.schema.model.DirectiveType;
 import io.smallrye.graphql.schema.model.Field;
@@ -237,6 +243,11 @@ public class SmallRyeGraphQLProcessor {
     }
 
     @BuildStep
+    void runtimeInitializedClasses(BuildProducer<RuntimeInitializedClassBuildItem> runtimeInitializedClasses) {
+        runtimeInitializedClasses.produce(new RuntimeInitializedClassBuildItem("graphql.util.IdGenerator"));
+    }
+
+    @BuildStep
     SmallRyeGraphQLModifiedClasesBuildItem createIndex(TransformedClassesBuildItem transformedClassesBuildItem) {
         Map<String, byte[]> modifiedClasses = new HashMap<>();
         Map<Path, Set<TransformedClassesBuildItem.TransformedClass>> transformedClassesByJar = transformedClassesBuildItem
@@ -286,6 +297,7 @@ public class SmallRyeGraphQLProcessor {
             indexer.indexClass(Inaccessible.class);
             indexer.indexClass(io.smallrye.graphql.api.federation.Override.class);
             indexer.indexClass(Tag.class);
+            indexer.indexClass(OneOf.class);
         } catch (IOException ex) {
             LOG.warn("Failure while creating index", ex);
         }
@@ -309,7 +321,8 @@ public class SmallRyeGraphQLProcessor {
 
         activateFederation(graphQLConfig, systemPropertyProducer, graphQLFinalIndexBuildItem);
         graphQLConfig.extraScalars.ifPresent(this::registerExtraScalarsInSchema);
-        Schema schema = SchemaBuilder.build(graphQLFinalIndexBuildItem.getFinalIndex(), graphQLConfig.autoNameStrategy);
+        Schema schema = SchemaBuilder.build(graphQLFinalIndexBuildItem.getFinalIndex(),
+                Converters.getImplicitConverter(TypeAutoNameStrategy.class).convert(graphQLConfig.autoNameStrategy));
 
         RuntimeValue<Boolean> initialized = recorder.createExecutionService(beanContainer.getValue(), schema, graphQLConfig);
         graphQLInitializedProducer.produce(new SmallRyeGraphQLInitializedBuildItem(initialized));
@@ -595,6 +608,13 @@ public class SmallRyeGraphQLProcessor {
     }
 
     @BuildStep
+    void excludeNullFieldsInResponses(SmallRyeGraphQLConfig graphQLConfig,
+            BuildProducer<SystemPropertyBuildItem> systemProperties) {
+        systemProperties.produce(new SystemPropertyBuildItem(ConfigKey.EXCLUDE_NULL_FIELDS_IN_RESPONSES,
+                String.valueOf(graphQLConfig.excludeNullFieldsInResponses.orElse(false))));
+    }
+
+    @BuildStep
     void printDataFetcherExceptionInDevMode(SmallRyeGraphQLConfig graphQLConfig,
             LaunchModeBuildItem launchMode,
             BuildProducer<SystemPropertyBuildItem> systemProperties) {
@@ -609,7 +629,6 @@ public class SmallRyeGraphQLProcessor {
                     String.valueOf(graphQLConfig.printDataFetcherException.get())));
         }
     }
-
     // Services Integrations
 
     @BuildStep

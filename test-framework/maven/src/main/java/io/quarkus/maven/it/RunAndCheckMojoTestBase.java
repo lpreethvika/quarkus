@@ -1,9 +1,11 @@
 package io.quarkus.maven.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -25,12 +27,21 @@ public class RunAndCheckMojoTestBase extends MojoTestBase {
     protected File testDir;
     protected DevModeClient devModeClient = new DevModeClient(getPort());
     private static final int DEFAULT_PORT = 8080;
+    private static final int DEFAULT_MEMORY_IN_MB = 128;
 
     /**
      * Default to port 8080, but allow subtests to override.
      */
     protected int getPort() {
         return DEFAULT_PORT;
+    }
+
+    /**
+     * Default to quite constrained memory, but allow subclasses to override, for hungrier tests.
+     */
+
+    protected int getAllowedHeapInMb() {
+        return DEFAULT_MEMORY_IN_MB;
     }
 
     @AfterEach
@@ -66,6 +77,8 @@ public class RunAndCheckMojoTestBase extends MojoTestBase {
     protected void run(boolean performCompile, LaunchMode mode, boolean skipAnalytics, String... options)
             throws FileNotFoundException, MavenInvocationException {
         assertThat(testDir).isDirectory();
+        assertThatPortIsFree();
+
         running = new RunningInvoker(testDir, false);
 
         final List<String> args = new ArrayList<>(3 + options.length);
@@ -101,8 +114,19 @@ public class RunAndCheckMojoTestBase extends MojoTestBase {
         //running at once, if they add default to 75% of total mem we can easily run out
         //of physical memory as they will consume way more than what they need instead of
         //just running GC
-        args.add("-Djvm.args=-Xmx128m");
+        args.add("-Djvm.args=-Xmx" + getAllowedHeapInMb() + "m");
         running.execute(args, Map.of());
+    }
+
+    private void assertThatPortIsFree() {
+        try {
+            // Call get(), which doesn't retry - otherwise, tests will go very slow
+            devModeClient.get();
+            fail("The port " + getPort()
+                    + " appears to be in use before starting the test instance of Quarkus, so any tests will give unpredictable results.");
+        } catch (IOException e) {
+            // All good, we wanted this
+        }
     }
 
     protected void runAndCheck(String... options) throws FileNotFoundException, MavenInvocationException {

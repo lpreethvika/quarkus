@@ -26,6 +26,14 @@ public class FrontendResource {
     ProtectedResourceServiceOidcClient protectedResourceServiceOidcClient;
 
     @Inject
+    @RestClient
+    ProtectedResourceServiceCrashTestClient protectedResourceServiceCrashTestClient;
+
+    @Inject
+    @RestClient
+    JwtBearerAuthenticationOidcClient jwtBearerAuthenticationOidcClient;
+
+    @Inject
     @NamedOidcClient("non-standard-response")
     Tokens tokens;
 
@@ -34,12 +42,34 @@ public class FrontendResource {
     OidcClient tokensWithoutHeader;
 
     @Inject
+    @NamedOidcClient("jwtbearer-grant")
+    OidcClient jwtBearerGrantClient;
+
+    @Inject
     OidcClients clients;
 
     @GET
     @Path("echoToken")
     public String echoToken() {
         return protectedResourceServiceOidcClient.echoToken();
+    }
+
+    @GET
+    @Path("crashTest")
+    public String crashTest() {
+        return protectedResourceServiceCrashTestClient.echoToken();
+    }
+
+    @GET
+    @Path("echoTokenJwtBearerGrant")
+    public String echoTokenJwtBearerGrant() {
+        return jwtBearerGrantClient.getTokens().await().indefinitely().getAccessToken();
+    }
+
+    @GET
+    @Path("echoTokenJwtBearerAuthentication")
+    public String echoTokenJwtBearerAuthentication() {
+        return jwtBearerAuthenticationOidcClient.echoToken();
     }
 
     @GET
@@ -81,5 +111,14 @@ public class FrontendResource {
         return clients.getClient("ciba-grant").getTokens(Map.of("auth_req_id", authReqId))
                 .onItem().transform(t -> Response.ok(t.getAccessToken()).build())
                 .onFailure(OidcClientException.class).recoverWithItem(t -> Response.status(400).entity(t.getMessage()).build());
+    }
+
+    @GET
+    @Path("device-code-grant")
+    @Produces("text/plain")
+    public Uni<Response> deviceCodeGrant(@QueryParam("deviceCode") String deviceCode) {
+        return clients.getClient("device-code-grant").getTokens(Map.of("device_code", deviceCode))
+                .onItem().transform(t -> Response.ok(t.getAccessToken()).build())
+                .onFailure(OidcClientException.class).recoverWithItem(t -> Response.status(401).build());
     }
 }

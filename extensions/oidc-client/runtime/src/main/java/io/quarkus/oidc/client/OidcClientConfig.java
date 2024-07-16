@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import io.quarkus.oidc.common.runtime.OidcCommonConfig;
 import io.quarkus.oidc.common.runtime.OidcConstants;
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.runtime.annotations.ConfigItem;
 
@@ -90,7 +91,13 @@ public class OidcClientConfig extends OidcCommonConfig {
              * 'urn:openid:params:grant-type:ciba' grant requiring an OIDC client authentication as well as 'auth_req_id'
              * parameter which must be passed to OidcClient at the token request time.
              */
-            CIBA("urn:openid:params:grant-type:ciba");
+            CIBA("urn:openid:params:grant-type:ciba"),
+            /**
+             * 'urn:ietf:params:oauth:grant-type:device_code' grant requiring an OIDC client authentication as well as
+             * 'device_code'
+             * parameter which must be passed to OidcClient at the token request time.
+             */
+            DEVICE("urn:ietf:params:oauth:grant-type:device_code");
 
             private String grantType;
 
@@ -178,6 +185,7 @@ public class OidcClientConfig extends OidcCommonConfig {
      * Grant options
      */
     @ConfigItem
+    @ConfigDocMapKey("grant-name")
     public Map<String, Map<String, String>> grantOptions;
 
     /**

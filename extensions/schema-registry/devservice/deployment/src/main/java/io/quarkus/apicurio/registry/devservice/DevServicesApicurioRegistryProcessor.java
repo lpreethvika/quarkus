@@ -79,8 +79,10 @@ public class DevServicesApicurioRegistryProcessor {
                 (launchMode.isTest() ? "(test) " : "") + "Apicurio Registry Dev Services Starting:",
                 consoleInstalledBuildItem, loggingSetupBuildItem);
         try {
+            boolean useSharedNetwork = DevServicesSharedNetworkBuildItem.isSharedNetworkRequired(devServicesConfig,
+                    devServicesSharedNetworkBuildItem);
             devService = startApicurioRegistry(dockerStatusBuildItem, configuration, launchMode,
-                    !devServicesSharedNetworkBuildItem.isEmpty(), devServicesConfig.timeout);
+                    useSharedNetwork, devServicesConfig.timeout);
             compressor.close();
         } catch (Throwable t) {
             compressor.closeAndDumpCaptured();
@@ -144,12 +146,12 @@ public class DevServicesApicurioRegistryProcessor {
             return null;
         }
 
-        if (ConfigUtils.isPropertyPresent(APICURIO_REGISTRY_URL_CONFIG)) {
+        if (ConfigUtils.isPropertyNonEmpty(APICURIO_REGISTRY_URL_CONFIG)) {
             log.debug("Not starting dev services for Apicurio Registry, " + APICURIO_REGISTRY_URL_CONFIG + " is configured.");
             return null;
         }
 
-        if (ConfigUtils.isPropertyPresent(CONFLUENT_SCHEMA_REGISTRY_URL_CONFIG)) {
+        if (ConfigUtils.isPropertyNonEmpty(CONFLUENT_SCHEMA_REGISTRY_URL_CONFIG)) {
             log.debug("Not starting dev services for Apicurio Registry, " + CONFLUENT_SCHEMA_REGISTRY_URL_CONFIG
                     + " is configured.");
             return null;
@@ -196,8 +198,8 @@ public class DevServicesApicurioRegistryProcessor {
                     && "smallrye-kafka".equals(config.getOptionalValue(name, String.class).orElse("ignored"));
             boolean isConfigured = false;
             if ((isIncoming || isOutgoing) && isKafka) {
-                isConfigured = ConfigUtils.isPropertyPresent(name.replace(".connector", ".apicurio.registry.url"))
-                        || ConfigUtils.isPropertyPresent(name.replace(".connector", ".schema.registry.url"));
+                isConfigured = ConfigUtils.isPropertyNonEmpty(name.replace(".connector", ".apicurio.registry.url"))
+                        || ConfigUtils.isPropertyNonEmpty(name.replace(".connector", ".schema.registry.url"));
             }
             if (!isConfigured) {
                 return true;

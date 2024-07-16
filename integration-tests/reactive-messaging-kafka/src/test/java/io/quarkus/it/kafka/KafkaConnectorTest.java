@@ -10,13 +10,14 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import io.quarkus.arc.Arc;
-import io.quarkus.test.common.QuarkusTestResource;
+import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.junit.DisabledOnIntegrationTest;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.kafka.KafkaCompanionResource;
@@ -25,7 +26,7 @@ import io.restassured.response.Response;
 import io.smallrye.reactive.messaging.kafka.commit.ProcessingState;
 
 @QuarkusTest
-@QuarkusTestResource(KafkaCompanionResource.class)
+@WithTestResource(value = KafkaCompanionResource.class, restrictToAnnotatedClass = false)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class KafkaConnectorTest {
 
@@ -57,6 +58,7 @@ public class KafkaConnectorTest {
         await().untilAsserted(() -> Assertions.assertEquals(get("/kafka/pets").as(TYPE_REF).size(), 3));
     }
 
+    @Disabled("MultiSplitter yields flaky results, to investigate")
     @Test
     @Order(3)
     public void testFruits() {

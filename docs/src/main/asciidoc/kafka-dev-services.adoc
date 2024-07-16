@@ -8,9 +8,9 @@ include::_attributes.adoc[]
 :categories: messaging
 :summary: Start Apache Kafka automatically in dev and test modes.
 :topics: messaging,kafka,dev-services,testing,dev-mode
-:extensions: io.quarkus:quarkus-kafka-client,io.quarkus:quarkus-smallrye-reactive-messaging-kafka
+:extensions: io.quarkus:quarkus-kafka-client,io.quarkus:quarkus-messaging-kafka
 
-If any Kafka-related extension is present (e.g. `quarkus-smallrye-reactive-messaging-kafka`), Dev Services for Kafka automatically starts a Kafka broker in dev mode and when running tests.
+If any Kafka-related extension is present (e.g. `quarkus-messaging-kafka`), Dev Services for Kafka automatically starts a Kafka broker in dev mode and when running tests.
 So, you don't have to start a broker manually.
 The application is configured automatically.
 
@@ -82,7 +82,7 @@ For Strimzi, you can select any image with a Kafka version which has Kraft suppo
 
 [source, properties]
 ----
-quarkus.kafka.devservices.image-name=quay.io/strimzi-test-container/test-container:0.105.0-kafka-3.6.0
+quarkus.kafka.devservices.image-name=quay.io/strimzi-test-container/test-container:0.106.0-kafka-3.7.0
 ----
 
 == Configuring Kafka topics

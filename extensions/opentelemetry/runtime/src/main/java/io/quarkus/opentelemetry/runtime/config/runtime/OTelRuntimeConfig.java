@@ -29,6 +29,11 @@ public interface OTelRuntimeConfig {
     TracesRuntimeConfig traces();
 
     /**
+     * Metric runtime config.
+     */
+    MetricsRuntimeConfig metric();
+
+    /**
      * environment variables for the types of attributes, for which that SDK implements truncation mechanism.
      */
     AttributeConfig attribute();
@@ -78,17 +83,12 @@ public interface OTelRuntimeConfig {
     InstrumentRuntimeConfig instrument();
 
     /**
-     * Opt-in to emit stable OpenTelemetry semantic conventions or a
-     * duplication of the old plus the new semantic convention attribute names.
+     * Prioritize OpenTelemetry configuration <code>otel.</code> on top of Quarkus OpenTelemetry configuration
+     * <code>quarkus.otel</code>.
      * <p>
-     * - <code>http</code> - emit the new, stable HTTP and networking attributes, and stop emitting the old
-     * experimental HTTP and networking attributes that the instrumentation emitted previously.
-     * <p>
-     * - <code>http/dup</code> - emit both the old and the stable HTTP and networking attributes, allowing
-     * for a more seamless transition.
-     * <p>
-     * The default, by not defining a property value, will mean the use of the old legacy semantic attribute names.
+     * By default, Quarkus configuration has priority over OpenTelemetry configuration.
      */
-    @WithName("otel.semconv-stability.opt-in")
-    Optional<String> otelSemconvStabilityOptIn();
+    @WithName("mp.compatibility")
+    @WithDefault("false")
+    boolean mpCompatibility();
 }

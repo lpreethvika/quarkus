@@ -8,6 +8,7 @@ import java.util.OptionalInt;
 import io.agroal.api.configuration.AgroalConnectionFactoryConfiguration;
 import io.agroal.api.configuration.AgroalConnectionPoolConfiguration;
 import io.quarkus.runtime.annotations.ConfigDocDefault;
+import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
@@ -115,6 +116,15 @@ public interface DataSourceJdbcRuntimeConfig {
     Optional<String> validationQuerySql();
 
     /**
+     * Forces connection validation prior to acquisition (foreground validation) regardless of the idle status.
+     * <p>
+     * Because of the overhead of performing validation on every call, it’s recommended to rely on default idle validation
+     * instead, and to leave this to `false`.
+     */
+    @WithDefault("false")
+    boolean validateOnBorrow();
+
+    /**
      * Disable pooling to prevent reuse of Connections. Use this when an external pool manages the life-cycle
      * of Connections.
      */
@@ -131,6 +141,7 @@ public interface DataSourceJdbcRuntimeConfig {
     /**
      * Other unspecified properties to be passed to the JDBC driver when creating new connections.
      */
+    @ConfigDocMapKey("property-key")
     Map<String, String> additionalJdbcProperties();
 
     /**

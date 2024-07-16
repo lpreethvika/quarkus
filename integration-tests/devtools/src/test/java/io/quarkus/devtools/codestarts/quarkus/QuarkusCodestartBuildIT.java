@@ -40,7 +40,8 @@ class QuarkusCodestartBuildIT extends PlatformAwareTestBase {
             "spring-web-codestart",
             "picocli-codestart",
             "hibernate-orm-codestart",
-            "reactive-messaging-codestart");
+            "hibernate-orm-rest-data-codestart",
+            "messaging-codestart");
 
     @BeforeAll
     static void setUp() throws IOException {
@@ -48,7 +49,7 @@ class QuarkusCodestartBuildIT extends PlatformAwareTestBase {
     }
 
     private static boolean isExcluded(String codestart) {
-        if (codestart.contains("resteasy-reactive")) {
+        if (codestart.contains("rest")) {
             return true;
         }
 

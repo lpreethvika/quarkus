@@ -5,20 +5,19 @@ import static io.quarkus.oidc.token.propagation.TokenPropagationConstants.OIDC_P
 
 import java.io.IOException;
 import java.util.Collections;
-import java.util.Optional;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.inject.Instance;
-import jakarta.inject.Inject;
+import jakarta.enterprise.inject.spi.CDI;
 import jakarta.ws.rs.client.ClientRequestContext;
 
 import org.eclipse.microprofile.config.ConfigProvider;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.oidc.client.OidcClient;
 import io.quarkus.oidc.client.OidcClientConfig.Grant;
 import io.quarkus.oidc.client.OidcClients;
+import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.oidc.token.propagation.runtime.AbstractTokenRequestFilter;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.security.credential.TokenCredential;
@@ -29,18 +28,9 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     // note: We can't use constructor injection for these fields because they are registered by RESTEasy
     // which doesn't know about CDI at the point of registration
 
-    private static final String ERROR_MSG = "OIDC Token Propagation requires a safe (isolated) Vert.x sub-context because configuration property 'quarkus.oidc-token-propagation.enabled-during-authentication' has been set to true, but the current context hasn't been flagged as such.";
+    private static final String ERROR_MSG = "OIDC Token Propagation requires a safe (isolated) Vert.x sub-context because configuration property 'quarkus.resteasy-client-oidc-token-propagation.enabled-during-authentication' has been set to true, but the current context hasn't been flagged as such.";
     private final boolean enabledDuringAuthentication;
-
-    @Inject
-    Instance<TokenCredential> accessToken;
-
-    @Inject
-    @ConfigProperty(name = "quarkus.oidc-token-propagation.client-name")
-    Optional<String> oidcClientName;
-    @Inject
-    @ConfigProperty(name = "quarkus.oidc-token-propagation.exchange-token")
-    boolean exchangeToken;
+    private final Instance<TokenCredential> accessToken;
 
     OidcClient exchangeTokenClient;
     String exchangeTokenProperty;
@@ -48,6 +38,7 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     public AccessTokenRequestFilter() {
         this.enabledDuringAuthentication = Boolean.getBoolean(OIDC_PROPAGATE_TOKEN_CREDENTIAL)
                 || Boolean.getBoolean(JWT_PROPAGATE_TOKEN_CREDENTIAL);
+        this.accessToken = CDI.current().select(TokenCredential.class);
     }
 
     @PostConstruct
@@ -64,7 +55,7 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
             if (exchangeTokenGrantType == Grant.Type.EXCHANGE) {
                 exchangeTokenProperty = "subject_token";
             } else if (exchangeTokenGrantType == Grant.Type.JWT) {
-                exchangeTokenProperty = "assertion";
+                exchangeTokenProperty = OidcConstants.JWT_BEARER_GRANT_ASSERTION;
             } else {
                 throw new ConfigurationException("Token exchange is required but OIDC client is configured "
                         + "to use the " + exchangeTokenGrantType.getGrantType() + " grantType");
@@ -73,7 +64,8 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     }
 
     protected boolean isExchangeToken() {
-        return exchangeToken;
+        return ConfigProvider.getConfig().getValue("quarkus.resteasy-client-oidc-token-propagation.exchange-token",
+                boolean.class);
     }
 
     @Override
@@ -98,7 +90,9 @@ public class AccessTokenRequestFilter extends AbstractTokenRequestFilter {
     }
 
     protected String getClientName() {
-        return oidcClientName.orElse(null);
+        return ConfigProvider.getConfig()
+                .getOptionalValue("quarkus.resteasy-client-oidc-token-propagation.client-name", String.class)
+                .orElse(null);
     }
 
     private boolean acquireTokenCredentialFromCtx(ClientRequestContext requestContext) {

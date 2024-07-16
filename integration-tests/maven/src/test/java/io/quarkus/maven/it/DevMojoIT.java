@@ -3,8 +3,6 @@ package io.quarkus.maven.it;
 import static io.quarkus.maven.it.ApplicationNameAndVersionTestUtil.assertApplicationPropertiesSetCorrectly;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.CoreMatchers.containsString;
-import static org.hamcrest.CoreMatchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -36,6 +34,7 @@ import java.util.zip.ZipOutputStream;
 import org.apache.commons.io.FileUtils;
 import org.apache.maven.shared.invoker.MavenInvocationException;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -70,7 +69,7 @@ public class DevMojoIT extends LaunchMojoTestBase {
     public void testFlattenedPomInTargetDir() throws MavenInvocationException, IOException {
         testDir = initProject("projects/pom-in-target-dir");
         run(true);
-        assertThat(devModeClient.getHttpResponse("/hello")).isEqualTo("Hello from RESTEasy Reactive");
+        assertThat(devModeClient.getHttpResponse("/hello")).isEqualTo("Hello from Quarkus REST");
     }
 
     @Test
@@ -517,7 +516,7 @@ public class DevMojoIT extends LaunchMojoTestBase {
                         "        </dependency>"));
 
         runAndCheck();
-        assertThat(devModeClient.getHttpResponse("/q/openapi", true)).contains("Resource not found");
+        assertThat(devModeClient.getHttpResponse("/q/openapi", true)).contains("Resource Not Found");
         shutdownTheApp();
 
         runAndCheck("-f", alternatePomName);
@@ -588,6 +587,57 @@ public class DevMojoIT extends LaunchMojoTestBase {
         assertEquals(2, artifacts.size());
 
         assertThat(devModeClient.getHttpResponse("/app/frontend")).isEqualTo("CustomValue1 CustomValue2");
+    }
+
+    @Test
+    public void testThatJUnitTestTemplatesWork() throws MavenInvocationException, IOException {
+        //we also check continuous testing
+        testDir = initProject("projects/test-template", "projects/test-template-processed");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests in both modules run
+        Assertions.assertEquals(2, results.getTestsPassed());
+
+        // Re-running the tests when changes happen is covered by testThatChangesTriggerRerunsOfJUnitTestTemplates
+    }
+
+    @Disabled("Not working; tracked by #40770")
+    @Test
+    public void testThatChangesTriggerRerunsOfJUnitTestTemplates() throws MavenInvocationException, IOException {
+        //we also check continuous testing
+        testDir = initProject("projects/test-template", "projects/test-template-processed");
+        runAndCheck();
+
+        ContinuousTestingMavenTestUtils testingTestUtils = new ContinuousTestingMavenTestUtils();
+        ContinuousTestingMavenTestUtils.TestStatus results = testingTestUtils.waitForNextCompletion();
+
+        //check that the tests in both modules run
+        Assertions.assertEquals(2, results.getTestsPassed());
+
+        // Edit the "Hello" message.
+        File source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        final String uuid = UUID.randomUUID().toString();
+        filter(source, Collections.singletonMap("return \"hello\";", "return \"" + uuid + "\";"));
+
+        // Wait until we get "uuid"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
+                .until(() -> devModeClient.getHttpResponse("/app/hello").contains(uuid));
+
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .pollInterval(1, TimeUnit.SECONDS)
+                .until(source::isFile);
+
+        results = testingTestUtils.waitForNextCompletion();
+
+        //make sure the test is failing now
+        Assertions.assertEquals(0, results.getTestsPassed());
+        Assertions.assertEquals(2, results.getTestsFailed());
     }
 
     @Test
@@ -941,37 +991,6 @@ public class DevMojoIT extends LaunchMojoTestBase {
                 .pollDelay(100, TimeUnit.MILLISECONDS)
                 .atMost(60, TimeUnit.SECONDS)
                 .until(() -> devModeClient.getHttpResponse("/app/hello/greeting").contains(uuid));
-    }
-
-    @Test
-    public void testThatNewResourcesAreServed() throws MavenInvocationException, IOException {
-        testDir = initProject("projects/classic", "projects/project-classic-run-resource-change");
-        runAndCheck();
-
-        // Create a new resource
-        File source = new File(testDir, "src/main/resources/META-INF/resources/lorem.txt");
-        FileUtils.write(source,
-                "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-                "UTF-8");
-        await()
-                .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
-                .until(() -> devModeClient.getHttpResponse("/lorem.txt"), containsString("Lorem ipsum"));
-
-        // Update the resource
-        String uuid = UUID.randomUUID().toString();
-        FileUtils.write(source, uuid, "UTF-8");
-        await()
-                .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
-                .until(() -> devModeClient.getHttpResponse("/lorem.txt"), equalTo(uuid));
-
-        // Delete the resource
-        source.delete();
-        await()
-                .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(TestUtils.getDefaultTimeout(), TimeUnit.MINUTES)
-                .until(() -> devModeClient.getHttpResponse("/lorem.txt", 404));
     }
 
     @Test

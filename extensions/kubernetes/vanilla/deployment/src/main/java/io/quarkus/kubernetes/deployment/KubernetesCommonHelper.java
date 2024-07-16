@@ -75,6 +75,7 @@ import io.dekorate.project.FileProjectFactory;
 import io.dekorate.project.Project;
 import io.dekorate.project.ScmInfo;
 import io.dekorate.utils.Annotations;
+import io.dekorate.utils.Git;
 import io.dekorate.utils.Labels;
 import io.dekorate.utils.Strings;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
@@ -124,7 +125,8 @@ public class KubernetesCommonHelper {
             Optional<CustomProjectRootBuildItem> customProjectRoot, OutputTargetBuildItem outputTarget,
             PackageConfig packageConfig) {
         return createProject(app, customProjectRoot, outputTarget.getOutputDirectory()
-                .resolve(String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(), packageConfig.getRunnerSuffix())));
+                .resolve(String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(),
+                        packageConfig.computedRunnerSuffix())));
     }
 
     public static Optional<Project> createProject(ApplicationInfoBuildItem app,
@@ -972,7 +974,7 @@ public class KubernetesCommonHelper {
 
         project.ifPresent(p -> {
             ScmInfo scm = p.getScmInfo();
-            String vcsUrl = scm != null ? scm.getRemote().get("origin") : null;
+            String vcsUri = parseVCSUri(config.getVCSUri(), scm);
             String commitId = scm != null ? scm.getCommit() : null;
 
             // Dekorate uses its own annotations. Let's replace them with the quarkus ones.
@@ -986,10 +988,10 @@ public class KubernetesCommonHelper {
                 result.add(new DecoratorBuildItem(target, new AddAnnotationDecorator(name,
                         new Annotation(QUARKUS_ANNOTATIONS_COMMIT_ID, commitId, new String[0]))));
             }
-            if (vcsUrl != null) {
+            if (vcsUri != null) {
                 result.add(new DecoratorBuildItem(target,
                         new AddAnnotationDecorator(name,
-                                new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, vcsUrl, new String[0]))));
+                                new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, vcsUri, new String[0]))));
             }
 
         });
@@ -1189,5 +1191,22 @@ public class KubernetesCommonHelper {
                         .withVerbs(it.verbs.orElse(null))
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    private static String parseVCSUri(VCSUriConfig config, ScmInfo scm) {
+        if (!config.enabled) {
+            return null;
+        }
+        if (config.override.isPresent()) {
+            return config.override.get();
+        }
+        if (scm == null) {
+            return null;
+        }
+        String originRemote = scm.getRemote().get("origin");
+        if (originRemote == null || originRemote.isBlank()) {
+            return null;
+        }
+        return Git.sanitizeRemoteUrl(originRemote);
     }
 }

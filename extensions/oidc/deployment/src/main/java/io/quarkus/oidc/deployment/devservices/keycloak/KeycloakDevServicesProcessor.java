@@ -109,7 +109,8 @@ public class KeycloakDevServicesProcessor {
     private static final String KEYCLOAK_QUARKUS_HOSTNAME = "KC_HOSTNAME";
     private static final String KEYCLOAK_QUARKUS_ADMIN_PROP = "KEYCLOAK_ADMIN";
     private static final String KEYCLOAK_QUARKUS_ADMIN_PASSWORD_PROP = "KEYCLOAK_ADMIN_PASSWORD";
-    private static final String KEYCLOAK_QUARKUS_START_CMD = "start --http-enabled=true --hostname-strict=false --hostname-strict-https=false";
+    private static final String KEYCLOAK_QUARKUS_START_CMD = "start --http-enabled=true --hostname-strict=false "
+            + "--spi-user-profile-declarative-user-profile-config-file=/opt/keycloak/upconfig.json";
 
     private static final String JAVA_OPTS = "JAVA_OPTS";
     private static final String OIDC_USERS = "oidc.users";
@@ -335,11 +336,11 @@ public class KeycloakDevServicesProcessor {
             LOG.debug("Not starting Dev Services for Keycloak as 'quarkus.oidc.tenant.enabled' is false");
             return null;
         }
-        if (ConfigUtils.isPropertyPresent(AUTH_SERVER_URL_CONFIG_KEY)) {
+        if (ConfigUtils.isPropertyNonEmpty(AUTH_SERVER_URL_CONFIG_KEY)) {
             LOG.debug("Not starting Dev Services for Keycloak as 'quarkus.oidc.auth-server-url' has been provided");
             return null;
         }
-        if (ConfigUtils.isPropertyPresent(PROVIDER_CONFIG_KEY)) {
+        if (ConfigUtils.isPropertyNonEmpty(PROVIDER_CONFIG_KEY)) {
             LOG.debug("Not starting Dev Services for Keycloak as 'quarkus.oidc.provider' has been provided");
             return null;
         }
@@ -363,7 +364,7 @@ public class KeycloakDevServicesProcessor {
                     capturedDevServicesConfiguration.port,
                     useSharedNetwork,
                     capturedDevServicesConfiguration.realmPath.orElse(List.of()),
-                    resourcesMap(),
+                    resourcesMap(errors),
                     capturedDevServicesConfiguration.serviceName,
                     capturedDevServicesConfiguration.shared,
                     capturedDevServicesConfiguration.javaOpts,
@@ -401,12 +402,17 @@ public class KeycloakDevServicesProcessor {
                 .orElseGet(defaultKeycloakContainerSupplier);
     }
 
-    private Map<String, String> resourcesMap() {
+    private Map<String, String> resourcesMap(List<String> errors) {
         Map<String, String> resources = new HashMap<>();
         for (Map.Entry<String, String> aliasEntry : capturedDevServicesConfiguration.resourceAliases.entrySet()) {
             if (capturedDevServicesConfiguration.resourceMappings.containsKey(aliasEntry.getKey())) {
                 resources.put(aliasEntry.getValue(),
                         capturedDevServicesConfiguration.resourceMappings.get(aliasEntry.getKey()));
+            } else {
+                errors.add(String.format("%s alias for the %s resource does not have a mapping", aliasEntry.getKey(),
+                        aliasEntry.getValue()));
+                LOG.errorf("%s alias for the %s resource does not have a mapping", aliasEntry.getKey(),
+                        aliasEntry.getValue());
             }
         }
         return resources;
@@ -504,6 +510,7 @@ public class KeycloakDevServicesProcessor {
                 addEnv(KEYCLOAK_QUARKUS_ADMIN_PASSWORD_PROP, KEYCLOAK_ADMIN_PASSWORD);
                 withCommand(startCommand.orElse(KEYCLOAK_QUARKUS_START_CMD)
                         + (useSharedNetwork ? " --hostname-port=" + fixedExposedPort.getAsInt() : ""));
+                addUpConfigResource();
             } else {
                 addEnv(KEYCLOAK_WILDFLY_USER_PROP, KEYCLOAK_ADMIN_USER);
                 addEnv(KEYCLOAK_WILDFLY_PASSWORD_PROP, KEYCLOAK_ADMIN_PASSWORD);
@@ -540,12 +547,25 @@ public class KeycloakDevServicesProcessor {
 
         private void mapResource(String resourcePath, String mappedResource) {
             if (Thread.currentThread().getContextClassLoader().getResource(resourcePath) != null) {
+                LOG.debugf("Mapping the classpath %s resource to %s", resourcePath, mappedResource);
                 withClasspathResourceMapping(resourcePath, mappedResource, BindMode.READ_ONLY);
             } else if (Files.exists(Paths.get(resourcePath))) {
+                LOG.debugf("Mapping the file system %s resource to %s", resourcePath, mappedResource);
                 withFileSystemBind(resourcePath, mappedResource, BindMode.READ_ONLY);
             } else {
-                errors.add(String.format("%s resource is not available", resourcePath));
-                LOG.errorf("Realm %s resource is not available", resourcePath);
+                errors.add(
+                        String.format(
+                                "%s resource can not be mapped to %s because it is not available on the classpath and file system",
+                                resourcePath, mappedResource));
+                LOG.errorf("%s resource can not be mapped to %s because it is not available on the classpath and file system",
+                        resourcePath, mappedResource);
+            }
+        }
+
+        private void addUpConfigResource() {
+            if (Thread.currentThread().getContextClassLoader().getResource("/dev-service/upconfig.json") != null) {
+                LOG.debug("Mapping the classpath /dev-service/upconfig.json resource to /opt/keycloak/upconfig.json");
+                withClasspathResourceMapping("/dev-service/upconfig.json", "/opt/keycloak/upconfig.json", BindMode.READ_ONLY);
             }
         }
 
